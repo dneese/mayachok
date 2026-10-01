@@ -120,6 +120,11 @@ async function poll() {
     setStatus('ok', `${data.users.length} у групі`);
     render();
     if (state.selected && !state.users.has(state.selected)) selectUser(null);
+
+    // Порожня група: найчастіше це помилка в коді, а не відсутність людей.
+    if (data.users.length === 0) {
+      setStatus('ok', 'у групі поки нікого немає — перевірте код');
+    }
   } catch (error) {
     setStatus('err', 'немає зв’язку з сервером');
   }

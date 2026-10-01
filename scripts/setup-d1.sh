@@ -34,7 +34,8 @@ else
     -H "Content-Type: application/json" \
     --data "$(jq -n --arg name "$DB_NAME" '{name:$name}')")
 
-  DB_ID=$(echo "$result" | jq -r '.result.id // empty')
+  # API повертає id при створенні та uuid у списку — беремо обидва варіанти.
+  DB_ID=$(echo "$result" | jq -r '.result.id // .result.uuid // empty')
   if [ -z "$DB_ID" ]; then
     echo "ПОМИЛКА створення бази:" >&2
     echo "$result" | jq . >&2

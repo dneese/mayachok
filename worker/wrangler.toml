@@ -5,7 +5,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "mayachok-db"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "4e98dec1-1721-4041-8160-e57390fcba3f"
 
 [triggers]
 crons = ["17 4 * * *"]

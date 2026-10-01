@@ -210,9 +210,12 @@ async function handleRename(request, db) {
   const name = sanitizeName(params.get('name'));
   if (!name) return bad('name required');
 
-  const res = await db.prepare('UPDATE users SET name = ?1 WHERE uid = ?2 AND gid = ?3').bind(name, uid, gid).run();
-  if (!res.success || !res.meta_changes) return json({ error: 'not found' }, 404);
-  return json({ ok: true, uid, name });
+  await db.prepare('UPDATE users SET name = ?1 WHERE uid = ?2 AND gid = ?3').bind(name, uid, gid).run();
+
+  // Перевіряємо через SELECT, а не за лічильником змін — він нестабільний між версіями D1.
+  const found = await db.prepare('SELECT name FROM users WHERE uid = ?1 AND gid = ?2').bind(uid, gid).first();
+  if (!found) return json({ error: 'not found' }, 404);
+  return json({ ok: true, uid, name: found.name });
 }
 
 async function handleHealth(db) {
@@ -227,15 +230,26 @@ async function cleanup(db) {
   const b = await db.prepare('DELETE FROM users WHERE last_seen < ?1').bind(usersCutoff).run();
   const c = await db.prepare('DELETE FROM groups WHERE created_at < ?1').bind(usersCutoff).run();
   return {
-    deletedPoints: a.meta_changes || 0,
-    deletedUsers: b.meta_changes || 0,
-    deletedGroups: c.meta_changes || 0,
+    deletedPoints: (a.meta && a.meta.changes) || 0,
+    deletedUsers: (b.meta && b.meta.changes) || 0,
+    deletedGroups: (c.meta && c.meta.changes) || 0,
   };
 }
 
 export default {
   async fetch(request, env) {
-    if (request.method === 'OPTIONS') return json({}, 204);
+    if (request.method === 'OPTIONS') {
+      // 204 не допускає тіла — повертаємо лише заголовки.
+      return new Response(null, {
+        status: 204,
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
+          'Access-Control-Max-Age': '86400',
+        },
+      });
+    }
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
