@@ -520,3 +520,13 @@ body.sheet-collapsed #map { bottom: 46px; }
 
 .gate-note { margin: 16px 0 0; font-size: 11px; line-height: 1.5; color: #9aa1ac; }
 .gate-note b { color: var(--muted); }
+
+/* «Був онлайн» у сповіщенні та попапі: час видно, колір приглушений,
+   щоб не плутати «зараз тут» із «був тут давно». */
+.seen-popup .when {
+  color: var(--muted);
+}
+
+.person-sub.is-stale {
+  color: var(--muted);
+}

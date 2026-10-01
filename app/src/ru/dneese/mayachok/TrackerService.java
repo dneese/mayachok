@@ -27,6 +27,10 @@ public final class TrackerService extends Service implements LocationListener {
   private static final String CHANNEL_ID = "gps_tracking";
   private static final int NOTIFICATION_ID = 42;
 
+  // Умови, за яких телефон вважає, що точку варто надсилати.
+  private static final double SEND_MIN_METERS = 20.0;
+  private static final long SEND_MAX_GAP_MS = 5 * 60 * 1000L;
+
   private LocationManager locationManager;
   private HandlerThread handlerThread;
   private Handler handler;
@@ -37,6 +41,12 @@ public final class TrackerService extends Service implements LocationListener {
   private double lastLon;
   private float lastAcc;
   private boolean haveFix;
+
+  // Остання надіслана точка — щоб не ганяти запити, коли ми стоїмо на місці.
+  private boolean haveSent;
+  private double lastSentLat;
+  private double lastSentLon;
+  private long lastSentAt;
 
   @Override
   public void onCreate() {
@@ -125,8 +135,42 @@ public final class TrackerService extends Service implements LocationListener {
   @Override
   public void onStatusChanged(String provider, int status, Bundle extras) {}
 
+  /** Груба відстань у метрах; для «рушився чи ні» більшої точності не треба. */
+  private double metersFrom(double lat, double lon) {
+    double dLat = (lat - lastSentLat) * Math.PI / 180.0d;
+    double dLon = (lon - lastSentLon) * Math.PI / 180.0d;
+    double a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2)
+            + Math.cos(lastSentLat * Math.PI / 180.0d)
+                * Math.cos(lat * Math.PI / 180.0d)
+                * Math.sin(dLon / 2)
+                * Math.sin(dLon / 2);
+    return 2 * 6371000.0d * Math.asin(Math.min(1.0d, Math.sqrt(a)));
+  }
+
+  /**
+   * Надсилаємо точку не кожні intervalSeconds, а лише коли є що сказати.
+   *
+   * GPS безкоштовний, а мобільний інтернет і запис у базу — ні. Тому
+   * рішення приймає сам телефон: якщо людина стоїть на місці або повільно
+   * йде, ми не ганяємо запити в порожнечу. На сервер іде одна й та сама
+   * остання точка, тож нічого не втрачається.
+   */
   private void sendNow() {
     if (!haveFix) return;
+
+    long now = System.currentTimeMillis();
+    boolean moved = !haveSent || metersFrom(lastSentLat, lastSentLon) >= SEND_MIN_METERS;
+    boolean due = !haveSent || now - lastSentAt >= SEND_MAX_GAP_MS;
+    // обидва «або» навмисно: і рух, і час. Стоячи — раз на дві хвилини
+    // (щоб було видно, що людина жива), ідучи — як тільки відійшли.
+    if (!moved && !due) return;
+
+    lastSentAt = now;
+    lastSentLat = lastLat;
+    lastSentLon = lastLon;
+    haveSent = true;
+
     api.send(lastLat, lastLon, lastAcc,
         new Api.Callback() {
           @Override

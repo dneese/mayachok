@@ -1,29 +1,14 @@
--- Міграція на складений ключ (gid, uid).
---
--- Стара схема мала uid PRIMARY KEY глобально: один пристрій міг належати
--- тільки одній групі назавжди, і при вході в іншу групу людина не з'являлася
--- на мапі. Тому таблицю перестворюємо і переносимо дані.
---
--- Ідемпотентно: можна запускати щоразу, дублі не з'являються (INSERT OR IGNORE).
+-- Перенесення останньої точки з журналу в рядок учасника.
+-- Виконується один раз; після цього points більше не поповнюється.
+ALTER TABLE users ADD COLUMN lat REAL;
+ALTER TABLE users ADD COLUMN lon REAL;
+ALTER TABLE users ADD COLUMN acc REAL;
+ALTER TABLE users ADD COLUMN bat INTEGER;
+ALTER TABLE users ADD COLUMN point_ts INTEGER;
 
-DROP TABLE IF EXISTS users_new;
-
-CREATE TABLE users_new (
-  gid        TEXT NOT NULL,
-  uid        TEXT NOT NULL,
-  name       TEXT,
-  role       TEXT NOT NULL DEFAULT 'tracker',
-  last_seen  INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (gid, uid)
-);
-
--- стари рядки не мають role — ті, хто надсилав точки, це трекери
-INSERT OR IGNORE INTO users_new (gid, uid, name, role, last_seen, created_at)
-  SELECT gid, uid, name, 'tracker', last_seen, created_at FROM users;
-
-DROP TABLE users;
-ALTER TABLE users_new RENAME TO users;
-
-CREATE INDEX IF NOT EXISTS idx_users_gid ON users(gid);
-CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen);
+UPDATE users SET
+  lat      = (SELECT p.lat FROM points p WHERE p.gid = users.gid AND p.uid = users.uid ORDER BY p.ts DESC LIMIT 1),
+  lon      = (SELECT p.lon FROM points p WHERE p.gid = users.gid AND p.uid = users.uid ORDER BY p.ts DESC LIMIT 1),
+  acc      = (SELECT p.acc FROM points p WHERE p.gid = users.gid AND p.uid = users.uid ORDER BY p.ts DESC LIMIT 1),
+  bat      = (SELECT p.bat FROM points p WHERE p.gid = users.gid AND p.uid = users.uid ORDER BY p.ts DESC LIMIT 1),
+  point_ts = (SELECT p.ts  FROM points p WHERE p.gid = users.gid AND p.uid = users.uid ORDER BY p.ts DESC LIMIT 1);

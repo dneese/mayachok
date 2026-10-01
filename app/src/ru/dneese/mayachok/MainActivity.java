@@ -925,6 +925,22 @@ public final class MainActivity extends Activity {
               public void onClick(android.content.DialogInterface dialog, int which) {
                 stopTracking();
                 stopChatWatcher();
+                // Спочатку просимо сервер стерти людину: інакше вона лишилася
+                // б на мапі в усіх, хто в тій групі. Код зберігаємо у змінній,
+                // бо нижче його вже скинуто.
+                final String leavingCode = prefs.code();
+                if (isCode(leavingCode)) {
+                  api.leave(
+                      leavingCode,
+                      new Api.Callback() {
+                        @Override
+                        public void onResult(String error) {
+                          // Помилка не заважає: локально групу ми вже забули,
+                          // а стару точку прибере щоденне прибирання бази.
+                          if (error != null) toast("Не вдалося стерти слід у групі");
+                        }
+                      });
+                }
                 prefs.setCode("");
                 // нова водяна позначка: у новій групі старі id не мають значення
                 prefs.setChatSeenId(0);

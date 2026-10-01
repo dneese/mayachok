@@ -10,11 +10,23 @@ CREATE TABLE IF NOT EXISTS users (
   role       TEXT NOT NULL DEFAULT 'tracker', -- 'tracker' надсилає GPS, 'chat' — лише пише
   last_seen  INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
+  -- Остання відома точка живе тут, у рядку учасника, а не в окремій
+  -- таблиці журналу. Причини дві: база не росте від часу (O(учасників),
+  -- а не O(точок)), і група бачить рівно те, що потрібно для пошуку
+  -- людини — де вона востаннє була і коли.
+  lat        REAL,
+  lon        REAL,
+  acc        REAL,
+  bat        INTEGER,
+  point_ts   INTEGER,  -- час останньої точки (не плутати з last_seen)
   PRIMARY KEY (gid, uid)
 );
 CREATE INDEX IF NOT EXISTS idx_users_gid ON users(gid);
 CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen);
 
+-- Журнал точок більше НЕ пишеться: телефон надсилає координату тільки коли
+-- зрушився, а сервер тримає лише останню. Таблиця лишається лише для
+-- одноразового перенесення старих даних і буде видалена окремим запитом.
 CREATE TABLE IF NOT EXISTS points (
   id  INTEGER PRIMARY KEY AUTOINCREMENT,
   uid TEXT NOT NULL,

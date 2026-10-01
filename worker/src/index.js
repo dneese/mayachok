@@ -1,15 +1,22 @@
 // gps-tracker Worker: прийом координат + API для мапи.
 // Група визначається кодом; gid = SHA-256(code)[0:16]. Сам код ніде не зберігається.
 
-const MAX_HISTORY_HOURS = 12; // скільки історії показує мапа
-const STALE_MINUTES = 30; // після цього маркер ховається
-const POINT_RETENTION_HOURS = 48; // стільки тримаємо в базі
-const USER_RETENTION_DAYS = 30; // неактивні користувачі видаляються
+// Остання точка живе в рядку учасника, тому «термін життя» позиції — це
+// і є стільки днів, скільки живий рядок: 30. Це і та гарантія, що
+// людину можна знайти після поїздки, і межа, за якою база не ростиме
+// вічно. Раніше було навпаки — 30 хвилин, і людина зникала безслідно.
+const MEMBER_RETENTION_DAYS = 30;
+const GROUP_RETENTION_DAYS = 30; // група без активності теж зникає
+
+// Економія запису: телефон сам надсилає точку лише тоді, коли зрушився
+// (див. TrackerService), а last_seen ми тротлимо, бо інакше кожна
+// перевірка «я в мережі» писала б у базу.
+const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
+const FRESH_MINUTES = 15; // після цього маркер сіріє (не зникає)
 const MAX_NAME_LEN = 24;
 const MAX_BODY_LEN = 500; // довжина одного повідомлення
 const CHAT_RETENTION_DAYS = 7; // стільки тримаємо переписку
 const MAX_CHAT_PAGE = 100;
-const MAX_TRACK_POINTS = 500; // спрощення сліду на сервері
 
 // Алфавіт без i, l, o, u — щоб не плутати при диктуванні телефоном.
 // 12 символів × 5 біт = 60 біт: перебір неможливий, а набирається легко.
@@ -108,6 +115,22 @@ async function handleJoin(request, db) {
 async function upsertUser(db, gid, uid, name, role) {
   const now = Date.now();
   if (uid) {
+    // Існуючого користувача оновлюємо не частіше ніж раз на LAST_SEEN_THROTTLE_MS.
+    // Цей запис ішов на кожну точку (2880/добу на людину) і сам по собі
+    // виїдав базу за половину денного ліміту. Точність «онлайн» від цього
+    // не страждає: дві хвилини нікого не хвилюють.
+    const cleanName = sanitizeName(name);
+    if (!cleanName) {
+      // Тротлінг діє лише для точок. При вході в групу ім'я (і роль) треба
+      // зберегти обов'язково, інакше перейменування зникло б на пару хвилин.
+      const known = await db
+        .prepare('SELECT last_seen FROM users WHERE gid = ?1 AND uid = ?2')
+        .bind(gid, uid)
+        .first();
+      if (known && now - Number(known.last_seen) < LAST_SEEN_THROTTLE_MS) {
+        return uid;
+      }
+    }
     // Ключ — пара (gid, uid): телефон може бути в кількох групах одночасно.
     // name перезаписуємо лише якщо прийшло непорожнє, щоб не стирати ім'я
     // при надсиланні точок без нього.
@@ -119,7 +142,7 @@ async function upsertUser(db, gid, uid, name, role) {
            last_seen = ?5,
            name = COALESCE(?3, users.name)`,
       )
-      .bind(gid, uid, sanitizeName(name) || null, role || 'tracker', now)
+      .bind(gid, uid, cleanName || null, role || 'tracker', now)
       .run();
     if (res.success) return uid;
   }
@@ -226,9 +249,16 @@ async function handleIngest(request, db) {
   const uid = await upsertUser(db, gid, params.get('uid'), params.get('name'));
   const user = await db.prepare('SELECT name FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).first();
 
+  // Остання точка пишеться в рядок учасника, а не в журнал. Так база не
+  // росте від часу: одна людина = один рядок назавжди, а не 2880 на добу.
+  // Телефон надсилає точку лише тоді, коли зрушився (див. TrackerService),
+  // тож «підлога» і «не пишемо, бо стоїть» тут навіть не потрібні.
   await db
-    .prepare('INSERT INTO points (uid, gid, lat, lon, acc, bat, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)')
-    .bind(uid, gid, Number(lat), Number(lon), acc, bat, ts)
+    .prepare(
+      `UPDATE users SET lat = ?3, lon = ?4, acc = ?5, bat = ?6, point_ts = ?7
+       WHERE gid = ?1 AND uid = ?2`,
+    )
+    .bind(gid, uid, Number(lat), Number(lon), acc, bat, ts)
     .run();
 
   return json({ ok: true, uid, name: user ? user.name : null, ts });
@@ -239,69 +269,56 @@ async function handleGroup(request, db) {
   const gid = await groupIdFor(params.get('code'));
   if (!gid) return bad('invalid code');
 
-  const staleCutoff = Date.now() - STALE_MINUTES * 60 * 1000;
+  // Раніше тут стояв фільтр «ховати учасника через 30 хв» — і людина зникала
+  // з карти безслідно. Тепер віддаємо всіх: стара точка лишається сірою
+  // разом із часом «був онлайн», і за нею можна знайти людину.
   const { results } = await db
     .prepare(
-      `SELECT u.uid, u.name, u.role, u.last_seen,
-              (SELECT p.lat   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lat,
-              (SELECT p.lon   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lon,
-              (SELECT p.acc   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS acc,
-              (SELECT p.bat   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS bat,
-              (SELECT p.ts    FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS ts
-       FROM users u
-       WHERE u.gid = ?1 AND u.last_seen >= ?2
-       ORDER BY u.created_at`,
+      // Один прохід по таблиці учасників. Раніше позиція бралася п'ятьма
+      // підзапитами на кожну людину — на 30 людях у групі це 150 рядків
+      // прочитаних за один опитування мапи.
+      `SELECT uid, name, role, last_seen, lat, lon, acc, bat, point_ts AS ts
+       FROM users
+       WHERE gid = ?1
+       ORDER BY created_at`,
     )
-    .bind(gid, staleCutoff)
+    .bind(gid)
     .all();
 
   return json({
     now: Date.now(),
-    staleAfterMs: STALE_MINUTES * 60 * 1000,
-    historyHours: MAX_HISTORY_HOURS,
+    // Після скількох хвилин без точок маркер стає сірим. Не зникає —
+    // просто видно, що це останнє відоме місце, а не «зараз тут».
+    staleAfterMs: FRESH_MINUTES * 60 * 1000,
+    // Скільки днів зберігаємо останню точку: далі її вже немає в базі.
+    retentionDays: MEMBER_RETENTION_DAYS,
     // Усі учасники вікна, навіть без координат: щойно додана людина
     // має бути видна як «чекаємо GPS», а не зникати до першої точки.
     users: results,
   });
 }
 
-async function handleTrack(request, db) {
+/**
+ * Вихід із групи. Важливо, щоб це робило і сервер, а не лише телефон:
+ * інакше людина «вийшла б» у себе на екрані, але її остання точка лишалася
+ * б у базі й усі в групі бачили б, де вона була.
+ */
+async function handleLeave(request, db) {
   const params = await readParams(request);
   const gid = await groupIdFor(params.get('code'));
   if (!gid) return bad('invalid code');
   const uid = params.get('uid');
   if (!uid) return bad('uid required');
 
-  let hours = Number(params.get('hours')) || MAX_HISTORY_HOURS;
-  hours = Math.min(Math.max(hours, 1), MAX_HISTORY_HOURS);
-
-  const since = Date.now() - hours * 60 * 60 * 1000;
-  const { results } = await db
-    .prepare(
-      `SELECT lat, lon, acc, bat, ts FROM points
-       WHERE uid = ?1 AND gid = ?2 AND ts >= ?3
-       ORDER BY ts`,
-    )
-    .bind(uid, gid, since)
-    .all();
-
-  const coords = simplify(results, MAX_TRACK_POINTS).map((p) => [p.lon, p.lat]);
-  const props = results.length ? { count: results.length, from: results[0].ts, to: results[results.length - 1].ts } : {};
+  const points = await db.prepare('DELETE FROM points WHERE gid = ?1 AND uid = ?2').bind(gid, uid).run();
+  const user = await db.prepare('DELETE FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).run();
 
   return json({
-    type: 'Feature',
-    properties: props,
-    geometry: { type: 'LineString', coordinates: coords },
+    ok: true,
+    uid,
+    deletedPoints: (points.meta && points.meta.changes) || 0,
+    deletedUser: (user.meta && user.meta.changes) || 0,
   });
-}
-
-// Рівномірне прореджування: лишаємо першу й останню точку, решта — рівномірно.
-function simplify(points, limit) {
-  if (points.length <= limit) return points;
-  const out = [];
-  const step = (points.length - 1) / (limit - 1);
-  for (let i = 0; i < limit; i++) out.push(points[Math.round(i * step)]);
-  return out;
 }
 
 async function handleRename(request, db) {
@@ -327,14 +344,16 @@ async function handleHealth(db) {
   return json({ ok: true, points: results.length, time: Date.now() });
 }
 
+
 async function cleanup(db) {
-  const pointsCutoff = Date.now() - POINT_RETENTION_HOURS * 60 * 60 * 1000;
-  const usersCutoff = Date.now() - USER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const usersCutoff = Date.now() - MEMBER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const groupsCutoff = Date.now() - GROUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const chatCutoff = Date.now() - CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  const a = await db.prepare('DELETE FROM points WHERE ts < ?1').bind(pointsCutoff).run();
+  const a = { meta: { changes: 0 } }; // журнал точок більше не ведеться
   const b = await db.prepare('DELETE FROM users WHERE last_seen < ?1').bind(usersCutoff).run();
-  const c = await db.prepare('DELETE FROM groups WHERE created_at < ?1').bind(usersCutoff).run();
+  const c = await db.prepare('DELETE FROM groups WHERE created_at < ?1').bind(groupsCutoff).run();
   const d = await db.prepare('DELETE FROM messages WHERE ts < ?1').bind(chatCutoff).run();
+  // Повідомлення щезалишаються в пам'яті після видалення рядка.
   return {
     deletedPoints: (a.meta && a.meta.changes) || 0,
     deletedUsers: (b.meta && b.meta.changes) || 0,
@@ -369,8 +388,8 @@ export default {
       if (path === '/api/join') return await handleJoin(request, db);
       if (path === '/api/ingest') return await handleIngest(request, db);
       if (path === '/api/group') return await handleGroup(request, db);
-      if (path === '/api/track') return await handleTrack(request, db);
       if (path === '/api/rename') return await handleRename(request, db);
+      if (path === '/api/leave') return await handleLeave(request, db);
       if (path === '/api/say') return await handleSay(request, db);
       if (path === '/api/chat') return await handleChat(request, db);
       if (path === '/api/health') return await handleHealth(db);
@@ -387,8 +406,8 @@ export default {
             '/api/join',
             '/api/ingest',
             '/api/group',
-            '/api/track',
             '/api/rename',
+            '/api/leave',
             '/api/say',
             '/api/chat',
             '/api/health',

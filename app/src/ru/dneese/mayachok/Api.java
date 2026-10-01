@@ -204,6 +204,35 @@ public final class Api {
    * Роботи це до першої GPS-точки: людина одразу з'являється на мапі
    * як «чекаємо сигнал», а не лише через півхвилини.
    */
+  /**
+   * Вихід із групи на сервері. Без цього людина «вийшла б» лише у себе на
+   * екрані, а її остання точка лишалася б у базі — усі в групі бачили б,
+   * де вона була.
+   */
+  public void leave(final String code, final Callback callback) {
+    pool.execute(
+        new Runnable() {
+          @Override
+          public void run() {
+            HttpURLConnection connection = null;
+            try {
+              String url =
+                  new Prefs(context).api()
+                      + "/api/leave?code="
+                      + URLEncoder.encode(code, "UTF-8")
+                      + "&uid="
+                      + URLEncoder.encode(new Prefs(context).uid(), "UTF-8");
+              connection = open(url);
+              callback.onResult(connection.getResponseCode() == 200 ? null : "не вийшло");
+            } catch (Exception error) {
+              callback.onResult("немає зв'язку");
+            } finally {
+              if (connection != null) connection.disconnect();
+            }
+          }
+        });
+  }
+
   public void join(final String code, final String name, final JoinCallback callback) {
     pool.execute(
         new Runnable() {

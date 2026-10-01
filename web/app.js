@@ -6,13 +6,11 @@ const PROJECT_URL = 'https://github.com/dneese/mayachok';
 const POLL_MS = 10000;
 const CHAT_POLL_MS = 3000;
 const FRESH_MS = 2 * 60 * 1000;
-const HOURS_OPTIONS = [1, 3, 12];
 
 const state = {
   code: null,
   users: new Map(),
   markers: new Map(),
-  trails: new Map(),
   selected: null,
   hours: 12,
   // чат
@@ -239,7 +237,6 @@ function render() {
     if (!seen.has(uid)) {
       map.removeLayer(marker);
       state.markers.delete(uid);
-      state.trails.delete(uid);
     }
   }
 
@@ -289,8 +286,12 @@ function renderPeople(now) {
       // щоб не здавалося, що вона зникла або не прийшла.
       // Учасник, який лише пише в чаті, координат не передає — йому не
       // треба чекати на GPS, бо він і не збирається його ввімкнути.
+      // Для свіжих — як раніше. Для старих — абсолютний час, щоб було
+      // видно, коли людину бачили востаннє (у туризмі це і є головне).
       const sub = hasFix
-        ? timeAgo(user.ts, now)
+        ? isFresh(user.ts, now)
+          ? timeAgo(user.ts, now)
+          : 'був онлайн ' + absoluteWhen(user.ts, now)
         : user.role === 'chat'
           ? 'у чаті, без GPS'
           : 'чекаємо сигнал GPS';
@@ -298,7 +299,7 @@ function renderPeople(now) {
         <div class="avatar ${hasFix && fresh ? 'fresh' : 'stale'}${hasFix ? '' : ' waiting'}" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
         <div class="person-meta">
           <div class="person-name">${escapeHtml(displayName(user))}</div>
-          <div class="person-sub">${sub}${user.bat != null && hasFix ? ' · ' + user.bat + '%' : ''}</div>
+          <div class="person-sub${hasFix && !isFresh(user.ts, now) ? ' is-stale' : ''}">${sub}${user.bat != null && hasFix ? ' · ' + user.bat + '%' : ''}</div>
         </div>
         <div class="person-actions">
           <button class="edit" data-uid="${escapeHtml(user.uid)}" title="Перейменувати">✎</button>
@@ -450,40 +451,48 @@ function openChat() {
 
 // --- слід ---
 
-async function selectUser(uid) {
+/**
+ * Вибір людини. Класичного сліду більше немає — сервер тримає лише
+ * останню відому точку, тому замість лінії показуємо час «був онлайн».
+ */
+function selectUser(uid) {
   state.selected = uid;
   render();
 
-  for (const [id, layer] of state.trails) {
-    if (id !== uid && layer) map.removeLayer(layer);
-  }
   if (!uid) return;
-  if (state.trails.has(uid)) return;
+  const user = state.users.get(uid);
+  if (!user || !user.lat) return;
 
-  try {
-    const res = await fetch(
-      `${API}/api/track?code=${encodeURIComponent(state.code)}&uid=${encodeURIComponent(uid)}&hours=${state.hours}`,
-      { cache: 'no-store' },
-    );
-    if (!res.ok) throw new Error('http ' + res.status);
-    const geo = await res.json();
-    const coords = geo.geometry.coordinates || [];
-    if (coords.length < 2) return;
+  L.popup()
+    .setLatLng([user.lat, user.lon])
+    .setContent(lastSeenPopup(user, Date.now()))
+    .openOn(map);
+}
 
-    const layer = L.polyline(
-      coords.map(([lon, lat]) => [lat, lon]),
-      {
-        color: userColor(state.users.get(uid)),
-        weight: 4,
-        opacity: 0.7,
-        lineJoin: 'round',
-      },
-    ).addTo(map);
-    layer.bindPopup(`${geo.properties.count ?? coords.length} точок за ${state.hours} год`);
-    state.trails.set(uid, layer);
-  } catch {
-    // слід не критичний — просто не малюємо
-  }
+/** «був онлайн» з абсолютною датою: у туризмі «3 години тому» нічого не значить. */
+function lastSeenPopup(user, now) {
+  const name = escapeHtml(displayName(user));
+  const when = user.ts ? absoluteWhen(user.ts, now) : 'ще не надсилав точку';
+  const acc = user.acc != null ? ` ±${Math.round(user.acc)} м` : '';
+  const fresh = isFresh(user.ts, now)
+    ? '<b>зараз тут</b>'
+    : `<span class="when">був онлайн</span> ${escapeHtml(when)}`;
+  return `<div class="seen-popup"><b>${name}</b><br>${fresh}${acc}</div>`;
+}
+
+/** Абсолютний час + відносний для свіжості: «сьогодні, 14:20 (2 хв тому)». */
+function absoluteWhen(ts, now) {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+  const days = Math.floor((now - ts) / 86400000);
+  const sameDay = new Date(now).toDateString() === d.toDateString();
+  const datePart = sameDay
+    ? 'сьогодні'
+    : days < 2
+      ? 'вчора'
+      : d.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' });
+  const rel = timeAgo(ts, now);
+  return `${datePart}, ${time}${rel ? ` (${rel})` : ''}`;
 }
 
 async function rename(uid, name) {
@@ -622,15 +631,6 @@ function start() {
 
 $('btn-fit').onclick = fitAll;
 
-$('btn-hours').onclick = () => {
-  const i = HOURS_OPTIONS.indexOf(state.hours);
-  state.hours = HOURS_OPTIONS[(i + 1) % HOURS_OPTIONS.length];
-  $('btn-hours').textContent = `${state.hours} год`;
-  for (const layer of state.trails.values()) map.removeLayer(layer);
-  state.trails.clear();
-  if (state.selected) selectUser(state.selected);
-};
-
 $('btn-info').onclick = () => openModal('modal-info');
 
 $('sheet-toggle').onclick = () => {
@@ -727,7 +727,6 @@ $('code-input').addEventListener('keydown', (event) => {
 
 // --- старт ---
 
-$('btn-hours').textContent = `${state.hours} год`;
 
 const initialCode = codeFromHash();
 if (initialCode) applyCode(initialCode);
