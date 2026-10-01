@@ -25,15 +25,13 @@
         <item name="android:layout_marginTop">4dp</item>
     </style>
 
-    <style name="CodeBig">
+    <style name="LinkBig">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:fontFamily">monospace</item>
-        <item name="android:textSize">26sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">0.08</item>
-        <item name="android:paddingTop">6dp</item>
-        <item name="android:paddingBottom">6dp</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">#2563eb</item>
+        <item name="android:paddingTop">4dp</item>
+        <item name="android:paddingBottom">4dp</item>
     </style>
 
     <style name="Link">

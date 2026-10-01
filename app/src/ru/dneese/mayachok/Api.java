@@ -25,6 +25,72 @@ public final class Api {
     void onResult(String error);
   }
 
+  /** Реєстрація в групі: повертає null при успіху або текст помилки. */
+  public interface JoinCallback {
+    void onResult(String error);
+  }
+
+  /**
+   * Повідомляє серверу, що цей телефон тепер у групі.
+   * Роботи це до першої GPS-точки: людина одразу з'являється на мапі
+   * як «чекаємо сигнал», а не лише через півхвилини.
+   */
+  public void join(final String code, final String name, final JoinCallback callback) {
+    pool.execute(
+        new Runnable() {
+          @Override
+          public void run() {
+            callback.onResult(doJoin(code, name));
+          }
+        });
+  }
+
+  private String doJoin(String code, String name) {
+    HttpURLConnection connection = null;
+    try {
+      Prefs prefs = new Prefs(context);
+      String body =
+          "{\"code\":"
+              + jsonString(code)
+              + ",\"uid\":"
+              + jsonString(prefs.uid())
+              + ",\"name\":"
+              + jsonString(name)
+              + "}";
+
+      URL url = new URL(prefs.api() + "/api/join");
+      connection = (HttpURLConnection) url.openConnection();
+      connection.setRequestMethod("POST");
+      connection.setDoOutput(true);
+      connection.setConnectTimeout(10000);
+      connection.setReadTimeout(10000);
+      connection.setRequestProperty("Content-Type", "application/json");
+      connection.setRequestProperty("Accept", "application/json");
+      connection.getOutputStream().write(body.getBytes("UTF-8"));
+      connection.getOutputStream().close();
+
+      int status = connection.getResponseCode();
+      if (status < 200 || status >= 300) return "Сервер відповів помилкою (" + status + ")";
+      connection.getInputStream().close();
+      return null;
+    } catch (Exception error) {
+      return "Немає зв’язку з сервером";
+    } finally {
+      if (connection != null) connection.disconnect();
+    }
+  }
+
+  private static String jsonString(String value) {
+    StringBuilder out = new StringBuilder("\"");
+    for (int i = 0; i < value.length(); i++) {
+      char c = value.charAt(i);
+      if (c == '"' || c == '\\') out.append('\\').append(c);
+      else if (c < 0x20) out.append('\\').append('u').append(String.format("%04x", (int) c));
+      else out.append(c);
+    }
+    return out.append('"').toString();
+  }
+
   /** Повертає код групи або null з описом помилки. */
   public interface GroupCallback {
     void onResult(String code, String error);

@@ -78,16 +78,42 @@ async function readParams(request) {
 }
 
 // Створює або оновлює користувача, повертає uid.
+async function handleJoin(request, db) {
+  const params = await readParams(request);
+  const gid = await groupIdFor(params.get('code'));
+  if (!gid) return bad('invalid code');
+
+  const uid = params.get('uid');
+  if (!uid) return bad('uid required');
+
+  const name = sanitizeName(params.get('name'));
+  if (!name) return bad('name required');
+
+  const member = await upsertUser(db, gid, uid, name);
+  const user = await db
+    .prepare('SELECT name, last_seen FROM users WHERE gid = ?1 AND uid = ?2')
+    .bind(gid, member)
+    .first();
+  if (!user) return json({ error: 'not found' }, 404);
+
+  return json({ ok: true, uid: member, name: user.name, gid });
+}
+
 async function upsertUser(db, gid, uid, name) {
   const now = Date.now();
   if (uid) {
+    // Ключ — пара (gid, uid): телефон може бути в кількох групах одночасно.
+    // name перезаписуємо лише якщо прийшло непорожнє, щоб не стирати ім'я
+    // при надсиланні точок без нього.
     const res = await db
       .prepare(
-        `INSERT INTO users (uid, gid, name, last_seen, created_at)
+        `INSERT INTO users (gid, uid, name, last_seen, created_at)
          VALUES (?1, ?2, ?3, ?4, ?4)
-         ON CONFLICT(uid) DO UPDATE SET last_seen = ?4`,
+         ON CONFLICT(gid, uid) DO UPDATE SET
+           last_seen = ?4,
+           name = COALESCE(?3, users.name)`,
       )
-      .bind(uid, gid, sanitizeName(name) || null, now)
+      .bind(gid, uid, sanitizeName(name) || null, now)
       .run();
     if (res.success) return uid;
   }
@@ -131,7 +157,7 @@ async function handleIngest(request, db) {
   const bat = isFiniteNumber(params.get('bat'), 0, 100) ? Math.round(Number(params.get('bat'))) : null;
 
   const uid = await upsertUser(db, gid, params.get('uid'), params.get('name'));
-  const user = await db.prepare('SELECT name FROM users WHERE uid = ?1').bind(uid).first();
+  const user = await db.prepare('SELECT name FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).first();
 
   await db
     .prepare('INSERT INTO points (uid, gid, lat, lon, acc, bat, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)')
@@ -150,11 +176,11 @@ async function handleGroup(request, db) {
   const { results } = await db
     .prepare(
       `SELECT u.uid, u.name, u.last_seen,
-              (SELECT p.lat   FROM points p WHERE p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lat,
-              (SELECT p.lon   FROM points p WHERE p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lon,
-              (SELECT p.acc   FROM points p WHERE p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS acc,
-              (SELECT p.bat   FROM points p WHERE p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS bat,
-              (SELECT p.ts    FROM points p WHERE p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS ts
+              (SELECT p.lat   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lat,
+              (SELECT p.lon   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lon,
+              (SELECT p.acc   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS acc,
+              (SELECT p.bat   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS bat,
+              (SELECT p.ts    FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS ts
        FROM users u
        WHERE u.gid = ?1 AND u.last_seen >= ?2
        ORDER BY u.created_at`,
@@ -166,7 +192,9 @@ async function handleGroup(request, db) {
     now: Date.now(),
     staleAfterMs: STALE_MINUTES * 60 * 1000,
     historyHours: MAX_HISTORY_HOURS,
-    users: results.filter((u) => u.lat !== null && u.lon !== null),
+    // Усі учасники вікна, навіть без координат: щойно додана людина
+    // має бути видна як «чекаємо GPS», а не зникати до першої точки.
+    users: results,
   });
 }
 
@@ -268,6 +296,7 @@ export default {
 
     try {
       if (path === '/api/create' && request.method === 'POST') return await handleCreate(db);
+      if (path === '/api/join') return await handleJoin(request, db);
       if (path === '/api/ingest') return await handleIngest(request, db);
       if (path === '/api/group') return await handleGroup(request, db);
       if (path === '/api/track') return await handleTrack(request, db);

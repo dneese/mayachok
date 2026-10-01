@@ -147,16 +147,32 @@ body.sheet-collapsed #map { bottom: 46px; }
 
 .code-head { display: flex; justify-content: space-between; align-items: baseline; }
 
+/* посилання на групу — головне, тому воно найбільше */
+
+.link {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--accent);
+  word-break: break-all;
+  margin: 4px 0 10px;
+}
+
 .code {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 27px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  margin: 3px 0 10px;
   word-break: break-all;
 }
 .code.small { font-size: 15px; margin: 2px 0 0; }
 .code.break { word-break: break-all; }
+
+/* код ручного введення — прихований, бо посилання головне */
+.code-detail { margin-top: 4px; }
+.code-detail summary { font-size: 12px; color: var(--muted); cursor: pointer; }
+.code-detail .code-code { margin-top: 8px; }
+.code-detail .hint { margin-top: 6px; }
 
 .code-actions { display: flex; gap: 7px; }
 
@@ -213,6 +229,8 @@ body.sheet-collapsed #map { bottom: 46px; }
 }
 .avatar.stale { opacity: 0.55; }
 .avatar.fresh { box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--fresh); }
+/* приєднався, але ще без точки: перекреслений, щоб не плутати з «застарів» */
+.avatar.waiting { opacity: 0.45; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #cbd2da; }
 
 .person-meta { flex: 1; min-width: 0; }
 .person-name {

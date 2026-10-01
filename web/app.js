@@ -29,9 +29,22 @@ function cleanCode(raw) {
   return String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function codeFromHash() {
-  const clean = cleanCode(decodeURIComponent(location.hash.replace(/^#/, '')));
+/**
+ * Дістає код із того, що вставив користувач: посилання, deep link або сам код.
+ * Так само, як Prefs.extractCode() у застосунку.
+ */
+function codeFromInput(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return null;
+  // код живе у фрагменті після '#'
+  const hash = text.lastIndexOf('#');
+  if (hash >= 0 && hash < text.length - 1) text = text.slice(hash + 1);
+  const clean = cleanCode(text);
   return clean.length >= 8 && clean.length <= 64 ? clean : null;
+}
+
+function codeFromHash() {
+  return codeFromInput(decodeURIComponent(location.hash.replace(/^#/, '')));
 }
 
 /** xxxx-xxxx-xxxx — щоб код можна було прочитати вголос. */
@@ -51,10 +64,12 @@ function deepLink() {
 function inviteText() {
   return (
     'Маячок — сімейний GPS-трекер.\n\n' +
-    'Код групи: ' + prettyCode(state.code) + '\n' +
-    'Мапа: ' + groupUrl() + '\n' +
-    'Встановити застосунок: ' + APK_URL + '\n\n' +
-    'Встанови APK, введи код і натисни «Почати».'
+    'Відкрий ось це посилання — і ти в групі:\n' +
+    groupUrl() +
+    '\n\nКод групи (якщо треба ввести вручну): ' +
+    prettyCode(state.code) +
+    '\nЗастосунок для Android: ' +
+    APK_URL
   );
 }
 
@@ -63,18 +78,19 @@ function inviteText() {
 function applyCode(code) {
   state.code = cleanCode(code);
   $('code-input').value = state.code;
-  $('code-value').textContent = prettyCode(state.code);
+  $('code-value').textContent = groupUrl();
   $('share-code').textContent = prettyCode(state.code);
   $('share-link').textContent = groupUrl();
   start();
 }
 
 function setCode(code) {
-  const encoded = '#' + encodeURIComponent(cleanCode(code));
+  const clean = cleanCode(code);
+  const encoded = '#' + encodeURIComponent(clean);
   if (location.hash !== encoded) {
     history.replaceState(null, '', location.pathname + location.search + encoded);
   }
-  applyCode(code);
+  applyCode(clean);
 }
 
 window.addEventListener('hashchange', () => {
@@ -188,7 +204,8 @@ function render() {
   const seen = new Set();
 
   for (const user of state.users.values()) {
-    if (user.lat == null || user.lon == null) continue;
+    const hasFix = user.lat != null && user.lon != null;
+    if (!hasFix) continue;
     seen.add(user.uid);
 
     const marker = state.markers.get(user.uid);
@@ -234,7 +251,7 @@ function renderPeople(now) {
   }
 
   for (const user of state.users.values()) {
-    if (user.lat == null) continue;
+    const hasFix = user.lat != null && user.lon != null;
     const fresh = isFresh(user.ts, now);
 
     const row = document.createElement('div');
@@ -258,11 +275,14 @@ function renderPeople(now) {
         if (e.key === 'Escape') cancelRename();
       };
     } else {
+      // Людина, що щойно приєдналася, ще не має точки — показуємо це прямо,
+      // щоб не здавалося, що вона зникла або не прийшла.
+      const sub = hasFix ? timeAgo(user.ts, now) : 'чекаємо сигнал GPS';
       row.innerHTML = `
-        <div class="avatar ${fresh ? 'fresh' : 'stale'}" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
+        <div class="avatar ${hasFix && fresh ? 'fresh' : 'stale'}${hasFix ? '' : ' waiting'}" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
         <div class="person-meta">
           <div class="person-name">${escapeHtml(displayName(user))}</div>
-          <div class="person-sub">${timeAgo(user.ts, now)}${user.bat != null ? ' · ' + user.bat + '%' : ''}</div>
+          <div class="person-sub">${sub}${user.bat != null && hasFix ? ' · ' + user.bat + '%' : ''}</div>
         </div>
         <div class="person-actions">
           <button class="edit" data-uid="${escapeHtml(user.uid)}" title="Перейменувати">✎</button>
@@ -271,6 +291,8 @@ function renderPeople(now) {
 
     row.onclick = (event) => {
       if (event.target.closest('button') || editing) return;
+      // без точки слід і маркер показати нема чого
+      if (!hasFix) return;
       selectUser(user.uid);
     };
     list.appendChild(row);
@@ -425,8 +447,14 @@ $('sheet-toggle').onclick = () => {
   setTimeout(() => map && map.invalidateSize(), 60);
 };
 
-$('btn-copy-code').onclick = () => copy(prettyCode(state.code), 'код');
 $('btn-copy-link').onclick = () => copy(groupUrl(), 'посилання');
+
+$('btn-app').onclick = () => {
+  // на телефоні без застосунку браузер просто не знає схему — тоді копіюємо посилання
+  location.href = deepLink();
+  setTimeout(() => copy(groupUrl(), 'посилання'), 1200);
+};
+
 $('btn-share').onclick = () => openModal('modal-share');
 
 $('btn-share-native').onclick = async () => {
@@ -474,13 +502,13 @@ document.addEventListener('keydown', (event) => {
 });
 
 $('btn-join').onclick = () => {
-  const value = $('code-input').value.trim();
+  const code = codeFromInput($('code-input').value);
   $('gate-error').textContent = '';
-  if (cleanCode(value).length < 8) {
-    $('gate-error').textContent = 'Код закороткий.';
+  if (!code) {
+    $('gate-error').textContent = 'Вставте посилання групи або код.';
     return;
   }
-  setCode(value);
+  setCode(code);
 };
 
 $('btn-create').onclick = async () => {

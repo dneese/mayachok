@@ -13,14 +13,14 @@
 
     <!-- 2. група -->
     <string name="label_group">2. Група</string>
-    <string name="hint_group_new">Створіть нову групу — код згенерується автоматично.</string>
+    <string name="hint_group_new">Створіть нову групу й надішліть посилання родичі чи друзям.</string>
     <string name="btn_create_group">Створити групу</string>
-    <string name="hint_group_join">Або введіть код, який вам надіслав інший учасник:</string>
-    <string name="hint_code">xxxx-xxxx-xxxx</string>
+    <string name="hint_group_join">Або вставте посилання, яке вам надіслали:</string>
+    <string name="hint_code">https://…</string>
     <string name="btn_join_group">Приєднатися</string>
-    <string name="hint_code_share">Цей код потрібен іншим, щоб вони знайшли вас на карті.</string>
-    <string name="btn_share">Поділитися запрошенням</string>
-    <string name="btn_copy_code">Скопіювати код</string>
+    <string name="hint_code_share">Скопіюйте посилання й надішліть. Той, хто його відкриє, потрапить у групу автоматично.</string>
+    <string name="btn_share">Поділитися посиланням</string>
+    <string name="btn_copy_link">Скопіювати посилання</string>
     <string name="btn_map">Відкрити мапу</string>
     <string name="btn_forget">Вийти з групи</string>
 

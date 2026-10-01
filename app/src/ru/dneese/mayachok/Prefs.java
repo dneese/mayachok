@@ -93,22 +93,39 @@ public final class Prefs {
 
   /** Пряме посилання, яке відкриває застосунок (якщо його встановлено). */
   public String deepLink() {
-    return "mayachok://join/" + code();
+    return "mayachok://join/" + prettyCode();
+  }
+
+  /**
+   * Дістає код із того, що вставив користувач: посилання, deep link або сам код.
+   * Люди копіюють посилання з месенджера, тому приймати саме його — зручніше,
+   * ніж просити вирізати з нього останні символи.
+   */
+  public static String extractCode(String input) {
+    if (input == null) return "";
+    String text = input.trim();
+    if (text.isEmpty()) return "";
+
+    // код зберігається у фрагменті після '#' — беремо саме його
+    int hash = text.lastIndexOf('#');
+    if (hash >= 0 && hash < text.length() - 1) text = text.substring(hash + 1);
+
+    return text.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.US);
   }
 
   /**
    * Текст запрошення: одразу готовий до відправлення в месенджер.
-   * Містить і код, і посилання — бо одне й друге потрібне різним людям.
+   * Користувач не знає, що таке «код», тому провідним є посилання,
+   * а код — лише другим рядком, для того хто вводить вручну.
    */
   public String inviteText() {
     return String.format(
         Locale.US,
         "Маячок — сімейний GPS-трекер.%n%n"
-            + "Код групи: %s%n"
-            + "Мапа: %s%n"
-            + "Встановити застосунок: %s%n%n"
-            + "Встанови APK, введи код і натисни «Почати».",
-        code(), mapUrl(), APK);
+            + "Відкрий ось це посилання — і ти в групі:%n%s%n%n"
+            + "Код групи (якщо треба ввести вручну): %s%n"
+            + "Застосунок для Android: %s",
+        mapUrl(), prettyCode(), APK);
   }
 
   /**
@@ -117,7 +134,7 @@ public final class Prefs {
    * інакше, ніж на мапі, і люди помилялися б при переписуванні.
    */
   public String prettyCode() {
-    String raw = code().replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.US);
+    String raw = extractCode(code());
     if (raw.length() <= 4) return raw;
     StringBuilder out = new StringBuilder();
     for (int i = 0; i < raw.length(); i++) {

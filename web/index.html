@@ -33,16 +33,23 @@
   <div class="sheet-body">
     <section class="code-block">
       <div class="code-head">
-        <span class="label">Код групи</span>
+        <span class="label">Посилання на групу</span>
         <span id="people-count" class="label muted">—</span>
       </div>
-      <div id="code-value" class="code">…</div>
+      <div id="code-value" class="link">…</div>
       <div class="code-actions">
-        <button id="btn-copy-code" class="primary">Скопіювати код</button>
-        <button id="btn-copy-link">Скопіювати посилання</button>
+        <button id="btn-copy-link" class="primary">Скопіювати</button>
+        <button id="btn-app">Відкрити застосунок</button>
         <button id="btn-share">Поділитися</button>
       </div>
-      <p class="hint">Цей код потрібен, щоб інші могли вступити. Надішліть його або посилання.</p>
+      <p class="hint">Надішліть це посилання. Той, хто його відкриє, потрапить у групу
+        автоматично — вводити нічого не треба.</p>
+      <details class="code-detail">
+        <summary>Ввести код вручну</summary>
+        <div class="code-code"><span id="share-code" class="code small">—</span></div>
+        <p class="hint">Потрібно, якщо немає можливості відкрити посилання — наприклад,
+          коли код диктують по телефону.</p>
+      </details>
     </section>
 
     <section class="people-block">
@@ -63,12 +70,13 @@
     <p class="modal-lead">Надішліть посилання — воно вже містить код, тож іншим не треба нічого вводити вручну.</p>
 
     <div class="field">
-      <span class="label">Код</span>
-      <code id="share-code" class="code small">—</code>
-    </div>
-    <div class="field">
       <span class="label">Посилання</span>
       <code id="share-link" class="code small break">—</code>
+    </div>
+
+    <details class="code-detail">
+      <summary>Код для ручного введення</summary>
+      <div class="code-code"><code id="share-code" class="code small">—</code></div>
     </div>
 
     <div class="modal-actions">
@@ -119,7 +127,7 @@
     </div>
     <p class="gate-lead">Сімейний GPS-трекер у реальному часі. Усі бачать один одного на карті.</p>
 
-    <input id="code-input" type="text" placeholder="код групи" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text">
+    <input id="code-input" type="text" placeholder="вставте посилання групи" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url">
     <div class="gate-actions">
       <button id="btn-join" class="primary">Увійти</button>
       <button id="btn-create">Створити групу</button>

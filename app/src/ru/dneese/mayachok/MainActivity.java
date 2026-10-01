@@ -39,6 +39,7 @@ public final class MainActivity extends Activity {
   private TextView codeValue;
   private EditText codeInput;
   private Button createButton;
+  private Button joinButton;
 
   private Spinner intervalSpinner;
   private Button toggle;
@@ -59,6 +60,7 @@ public final class MainActivity extends Activity {
     codeValue = findViewById(R.id.code_value);
     codeInput = findViewById(R.id.code);
     createButton = findViewById(R.id.create);
+    joinButton = findViewById(R.id.join);
 
     intervalSpinner = findViewById(R.id.interval);
     toggle = findViewById(R.id.toggle);
@@ -91,13 +93,7 @@ public final class MainActivity extends Activity {
     findViewById(R.id.join).setOnClickListener(new View.OnClickListener() {
       @Override
       public void onClick(View view) {
-        saveBasics();
-        if (!prefs.configured()) {
-          toast("Введіть код групи");
-          return;
-        }
-        render();
-        toast("Ви в групі " + prefs.prettyCode());
+        joinGroup();
       }
     });
 
@@ -111,7 +107,7 @@ public final class MainActivity extends Activity {
     findViewById(R.id.copy).setOnClickListener(new View.OnClickListener() {
       @Override
       public void onClick(View view) {
-        copy(prefs.prettyCode());
+        copy(prefs.mapUrl());
       }
     });
 
@@ -167,16 +163,13 @@ public final class MainActivity extends Activity {
     render();
   }
 
-  /** mayachok://join/xxxx-xxxx-xxxx — підставляє код, який надіслав інший учасник. */
+  /** mayachok://join/xxxx-xxxx-xxxx — запрошення відкриває застосунок. */
   private void handleDeepLink(Intent intent) {
     if (intent == null || intent.getData() == null) return;
     Uri data = intent.getData();
     if (!"mayachok".equals(data.getScheme())) return;
-    String code = data.getLastPathSegment();
-    if (code == null) code = data.getQueryParameter("code");
-    if (code == null) return;
-    code = code.replaceAll("[^A-Za-z0-9]", "");
-    if (code.length() < 8) return;
+    String code = Prefs.extractCode(data.toString());
+    if (!isCode(code)) return;
     prefs.setCode(code);
     if (!codeInput.getText().toString().isEmpty()) codeInput.setText(code);
   }
@@ -210,11 +203,63 @@ public final class MainActivity extends Activity {
                     createButton.setText(R.string.btn_create_group);
                     if (code != null) {
                       prefs.setCode(code);
-                      toast("Групу створено: " + prefs.prettyCode());
+                      toast("Групу створено");
+                      // щойно створена група — одразу запускаємо трекер
+                      if (!prefs.isTracking()) startTracking();
                     } else {
                       toast(error);
                     }
                     render();
+                  }
+                });
+          }
+        });
+  }
+
+  private static boolean isCode(String value) {
+    return value != null && value.length() >= 8 && value.length() <= 64;
+  }
+
+  /**
+   * Приєднання за посиланням: користувач вставляє саме посилання
+   * з запрошення, а код ми дістаємо з нього самі.
+   * Після успіху трекер стартує без зайвих кроків — «ввів ім’я і все».
+   */
+  private void joinGroup() {
+    String code = Prefs.extractCode(codeInput.getText().toString());
+    if (!isCode(code)) {
+      toast("Вставте посилання групи");
+      return;
+    }
+    String name = nameInput.getText().toString().trim();
+    if (name.isEmpty()) {
+      toast("Введіть своє ім’я");
+      return;
+    }
+
+    prefs.setCode(code);
+    prefs.setName(name);
+    prefs.setIntervalSeconds(INTERVALS[intervalSpinner.getSelectedItemPosition()]);
+    render();
+
+    joinButton.setEnabled(false);
+    api.join(
+        code,
+        name,
+        new Api.JoinCallback() {
+          @Override
+          public void onResult(final String error) {
+            runOnUiThread(
+                new Runnable() {
+                  @Override
+                  public void run() {
+                    joinButton.setEnabled(true);
+                    if (error != null) {
+                      toast(error);
+                      return;
+                    }
+                    toast("Ви в групі");
+                    if (!prefs.isTracking()) startTracking();
                   }
                 });
           }
@@ -229,7 +274,8 @@ public final class MainActivity extends Activity {
     groupReady.setVisibility(hasGroup ? View.VISIBLE : View.GONE);
 
     if (hasGroup) {
-      codeValue.setText(prefs.prettyCode());
+      // показуємо посилання, а не код: саме його надсилають іншим
+      codeValue.setText(prefs.mapUrl());
       codeInput.setText(prefs.code());
     }
 
@@ -243,7 +289,7 @@ public final class MainActivity extends Activity {
   private void shareInvite() {
     Intent send = new Intent(Intent.ACTION_SEND);
     send.setType("text/plain");
-    send.putExtra(Intent.EXTRA_SUBJECT, "Маячок — код групи " + prefs.prettyCode());
+    send.putExtra(Intent.EXTRA_SUBJECT, "Маячок — група родичі");
     send.putExtra(Intent.EXTRA_TEXT, prefs.inviteText());
     try {
       startActivity(Intent.createChooser(send, getString(R.string.btn_share)));

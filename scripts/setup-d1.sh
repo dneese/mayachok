@@ -44,20 +44,31 @@ else
   echo "    створено: $DB_ID"
 fi
 
+run_sql() {
+  local label="$1" file="$2" sql result
+  sql=$(cat "$file")
+  result=$(curl -sS -X POST "$API/d1/database/$DB_ID/query" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data "$(jq -n --arg sql "$sql" '{sql:$sql}')")
+
+  if [ "$(echo "$result" | jq -r '.success // false')" != "true" ]; then
+    echo "ПОМИЛКА ($label):" >&2
+    echo "$result" | jq . >&2
+    exit 1
+  fi
+  echo "    $label застосовано"
+}
+
 echo "==> накатую схему"
-sql=$(cat worker/schema.sql)
+run_sql "схема" worker/schema.sql
 
-result=$(curl -sS -X POST "$API/d1/database/$DB_ID/query" \
-  -H "Authorization: Bearer $CF_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  --data "$(jq -n --arg sql "$sql" '{sql:$sql}')")
-
-if [ "$(echo "$result" | jq -r '.success // false')" != "true" ]; then
-  echo "ПОМИЛКА схеми:" >&2
-  echo "$result" | jq . >&2
-  exit 1
+# Міграції йдуть після схеми: CREATE TABLE IF NOT EXISTS не змінює наявну
+# таблицю, тож перехід на нові ключі робиться окремим кроком.
+if [ -f worker/migrate.sql ]; then
+  echo "==> застосовую міграції"
+  run_sql "міграція" worker/migrate.sql
 fi
-echo "    схема застосована"
 
 echo "==> підставляю database_id у wrangler.toml"
 sed -i.bak "s|^database_id = .*|database_id = \"$DB_ID\"|" worker/wrangler.toml && rm -f worker/wrangler.toml.bak
