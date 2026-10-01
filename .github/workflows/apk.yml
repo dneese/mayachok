@@ -51,8 +51,11 @@ jobs:
           echo "    ключ відновлено"
 
       - name: Зібрати APK
+        env:
+          KS_PASS: ${{ secrets.MAYACHOK_KS_PASS }}
         run: |
           cd app
+          export MAYACHOK_KS_PASS="$KS_PASS"
           export AAPT2="${{ steps.sdk.outputs.build_tools }}aapt2"
           export D8="${{ steps.sdk.outputs.build_tools }}d8"
           export APKSIGNER="${{ steps.sdk.outputs.build_tools }}apksigner"
