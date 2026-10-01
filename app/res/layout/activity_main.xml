@@ -10,6 +10,7 @@
         android:orientation="vertical"
         android:padding="20dp">
 
+        <!-- заголовок і стан -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -22,105 +23,178 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:layout_marginBottom="20dp"
+            android:layout_marginBottom="22dp"
             android:textColor="#666666"
             android:textSize="14sp" />
 
+        <!-- 1. хто я -->
         <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/label_name"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            style="@style/Label"
+            android:text="@string/label_name" />
 
         <EditText
             android:id="@+id/name"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            style="@style/Field"
             android:hint="@string/hint_name"
             android:importantForAutofill="no"
-            android:inputType="textPersonName"
+            android:inputType="textPersonName|textCapWords"
             android:maxLength="24" />
 
+        <!-- 2. група -->
         <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:text="@string/label_code"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            style="@style/Label"
+            android:layout_marginTop="26dp"
+            android:text="@string/label_group" />
 
-        <EditText
-            android:id="@+id/code"
+        <!-- ще немає групи -->
+        <LinearLayout
+            android:id="@+id/group_empty"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:fontFamily="monospace"
-            android:hint="@string/hint_code"
-            android:importantForAutofill="no"
-            android:inputType="textNoSuggestions" />
+            android:orientation="vertical">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:text="@string/label_api"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            <TextView
+                style="@style/Hint"
+                android:text="@string/hint_group_new" />
 
-        <EditText
-            android:id="@+id/api"
+            <Button
+                android:id="@+id/create"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/btn_create_group" />
+
+            <TextView
+                style="@style/Hint"
+                android:layout_marginTop="20dp"
+                android:text="@string/hint_group_join" />
+
+            <EditText
+                android:id="@+id/code"
+                style="@style/Field"
+                android:fontFamily="monospace"
+                android:hint="@string/hint_code"
+                android:importantForAutofill="no"
+                android:inputType="textNoSuggestions" />
+
+            <Button
+                android:id="@+id/join"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/btn_join_group" />
+        </LinearLayout>
+
+        <!-- група вже є -->
+        <LinearLayout
+            android:id="@+id/group_ready"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:fontFamily="monospace"
-            android:hint="@string/hint_api"
-            android:importantForAutofill="no"
-            android:inputType="textUri" />
+            android:orientation="vertical">
 
+            <TextView
+                android:id="@+id/code_value"
+                style="@style/CodeBig" />
+
+            <TextView
+                style="@style/Hint"
+                android:text="@string/hint_code_share" />
+
+            <Button
+                android:id="@+id/share"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/btn_share" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/copy"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/btn_copy_code" />
+
+                <Button
+                    android:id="@+id/map"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/btn_map" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/forget"
+                style="@style/Link"
+                android:layout_marginTop="6dp"
+                android:text="@string/btn_forget" />
+        </LinearLayout>
+
+        <!-- 3. трекер -->
         <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:text="@string/label_interval"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            style="@style/Label"
+            android:layout_marginTop="26dp"
+            android:text="@string/label_interval" />
 
         <Spinner
             android:id="@+id/interval"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp" />
+            android:layout_marginTop="2dp" />
 
         <TextView
-            android:layout_width="wrap_content"
+            style="@style/Hint"
+            android:text="@string/note_battery" />
+
+        <Button
+            android:id="@+id/toggle"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/note_battery"
-            android:textColor="#888888"
-            android:textSize="12sp" />
+            android:layout_marginTop="16dp"
+            android:text="@string/btn_start" />
+
+        <!-- 4. довідка -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="28dp"
+            android:layout_marginBottom="18dp"
+            android:background="#e0e0e0" />
+
+        <TextView
+            style="@style/Label"
+            android:text="@string/label_help" />
+
+        <TextView
+            style="@style/Hint"
+            android:text="@string/hint_help" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="10dp"
             android:orientation="horizontal">
 
             <Button
-                android:id="@+id/save"
+                android:id="@+id/github"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:layout_weight="1"
-                android:text="@string/btn_save" />
+                android:text="@string/btn_github" />
 
             <Button
-                android:id="@+id/toggle"
+                android:id="@+id/apk"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/btn_start" />
+                android:text="@string/btn_apk" />
         </LinearLayout>
 
     </LinearLayout>

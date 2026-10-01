@@ -1,8 +1,10 @@
-/* gps-tracker — мапа групи. Код групи живе у location.hash і не йде на сервер. */
+/* Маячок — мапа групи. Код групи живе у location.hash і не йде на сервер. */
 
-const API = window.GPS_API || 'https://mayachok.kikikiska.workers.dev';
+const API = 'https://mayachok.kikikiska.workers.dev';
+const APK_URL = 'https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk';
+
 const POLL_MS = 10000;
-const FRESH_MS = 2 * 60 * 1000; // до 2 хв — «щойно онлайн»
+const FRESH_MS = 2 * 60 * 1000;
 const HOURS_OPTIONS = [1, 3, 12];
 
 const state = {
@@ -12,36 +14,66 @@ const state = {
   trails: new Map(),
   selected: null,
   hours: 12,
-  staleAfterMs: 30 * 60 * 1000,
 };
 
 let map = null;
 let started = false;
+let editing = null; // uid, чию саме ім'я редагують
 
 const $ = (id) => document.getElementById(id);
 
-// --- код групи з hash ---
+// --- код групи ---
+
+/** Чистить код: без дефісів, у нижньому регістрі — так сервер і приймає. */
+function cleanCode(raw) {
+  return String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 function codeFromHash() {
-  const raw = decodeURIComponent(location.hash.replace(/^#/, '')).trim();
-  const clean = raw.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const clean = cleanCode(decodeURIComponent(location.hash.replace(/^#/, '')));
   return clean.length >= 8 && clean.length <= 64 ? clean : null;
+}
+
+/** xxxx-xxxx-xxxx — щоб код можна було прочитати вголос. */
+function prettyCode(raw) {
+  const clean = cleanCode(raw);
+  return clean.match(/.{1,4}/g)?.join('-') || clean;
+}
+
+function groupUrl() {
+  return location.origin + location.pathname + '#' + state.code;
+}
+
+function deepLink() {
+  return 'mayachok://join/' + prettyCode(state.code);
+}
+
+function inviteText() {
+  return (
+    'Маячок — сімейний GPS-трекер.\n\n' +
+    'Код групи: ' + prettyCode(state.code) + '\n' +
+    'Мапа: ' + groupUrl() + '\n' +
+    'Встановити застосунок: ' + APK_URL + '\n\n' +
+    'Встанови APK, введи код і натисни «Почати».'
+  );
 }
 
 // Зміна лише хеша не перезавантажує документ, тому start() треба
 // викликати вручну — інакше ворота лишаються на екрані.
 function applyCode(code) {
-  state.code = code;
-  $('code-input').value = code;
+  state.code = cleanCode(code);
+  $('code-input').value = state.code;
+  $('code-value').textContent = prettyCode(state.code);
+  $('share-code').textContent = prettyCode(state.code);
+  $('share-link').textContent = groupUrl();
   start();
 }
 
 function setCode(code) {
-  const encoded = '#' + encodeURIComponent(code);
-  if (location.hash === encoded) {
-    applyCode(code);
-    return;
+  const encoded = '#' + encodeURIComponent(cleanCode(code));
+  if (location.hash !== encoded) {
+    history.replaceState(null, '', location.pathname + location.search + encoded);
   }
-  history.replaceState(null, '', location.pathname + location.search + encoded);
   applyCode(code);
 }
 
@@ -51,6 +83,7 @@ window.addEventListener('hashchange', () => {
 });
 
 // --- форматування ---
+
 function timeAgo(ts, now) {
   if (!ts) return 'невідомо';
   const s = Math.max(0, Math.round((now - ts) / 1000));
@@ -58,8 +91,7 @@ function timeAgo(ts, now) {
   if (s < 60) return `${s} с тому`;
   const m = Math.round(s / 60);
   if (m < 60) return `${m} хв тому`;
-  const h = Math.floor(m / 60);
-  return `${h} год тому`;
+  return `${Math.floor(m / 60)} год тому`;
 }
 
 function initial(name, uid) {
@@ -76,82 +108,82 @@ function isFresh(ts, now) {
   return now - ts < FRESH_MS;
 }
 
+// Стійкий колір на основі uid: різна людина — різний колір.
+function userColor(user) {
+  let h = 0;
+  const s = (user && user.uid) || '';
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return `hsl(${h}, 62%, 48%)`;
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
+}
+
 // --- карта ---
+
 function initMap() {
-  map = L.map('map', { zoomControl: true, attributionControl: true }).setView([49.84, 24.03], 12);
+  map = L.map('map', { zoomControl: false, attributionControl: true }).setView(
+    [49.84, 24.03],
+    12,
+  );
 
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
 
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
   map.on('click', () => selectUser(null));
 }
 
 function pinIcon(user, now) {
-  const fresh = isFresh(user.ts, now);
   return L.divIcon({
     className: '',
-    html: `<div class="pin ${fresh ? '' : 'stale'}" style="background:${userColor(user)}"></div>`,
+    html: `<div class="pin ${isFresh(user.ts, now) ? 'fresh' : 'stale'}" style="--c:${userColor(user)}"></div>`,
     iconSize: [18, 18],
     iconAnchor: [9, 9],
     popupAnchor: [0, -10],
   });
 }
 
-// Стійкий колір на основі uid: різна людина — різний колір.
-function userColor(user) {
-  let h = 0;
-  const s = user.uid || '';
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
-  return `hsl(${h}, 62%, 48%)`;
-}
-
 function popupHtml(user, now) {
-  const rows = [
-    `<b>${escapeHtml(displayName(user))}</b>`,
-    timeAgo(user.ts, now),
-  ];
+  const rows = [`<b>${escapeHtml(displayName(user))}</b>`, timeAgo(user.ts, now)];
   if (user.acc != null && user.acc > 0) rows.push(`точність ±${Math.round(user.acc)} м`);
   if (user.bat != null) rows.push(`батарея ${user.bat}%`);
-  return `
-    ${rows.join('<br>')}
-    <div class="rename-row">
-      <input type="text" maxlength="24" placeholder="ім'я" value="${escapeHtml(user.name || '')}">
-      <button data-uid="${escapeHtml(user.uid)}">OK</button>
-    </div>`;
-}
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  return `${rows.join('<br>')}<div class="meta">Колір закріплений за цим пристроєм</div>`;
 }
 
 // --- оновлення ---
+
 async function poll() {
   if (!state.code) return;
   try {
-    const res = await fetch(`${API}/api/group?code=${encodeURIComponent(state.code)}`, { cache: 'no-store' });
+    const res = await fetch(`${API}/api/group?code=${encodeURIComponent(state.code)}`, {
+      cache: 'no-store',
+    });
     if (!res.ok) throw new Error('http ' + res.status);
     const data = await res.json();
 
-    state.staleAfterMs = data.staleAfterMs || state.staleAfterMs;
     state.users.clear();
     for (const u of data.users) state.users.set(u.uid, u);
 
-    setStatus('ok', `${data.users.length} у групі`);
     render();
     if (state.selected && !state.users.has(state.selected)) selectUser(null);
 
-    // Порожня група: найчастіше це помилка в коді, а не відсутність людей.
-    if (data.users.length === 0) {
-      setStatus('ok', 'у групі поки нікого немає — перевірте код');
-    }
-  } catch (error) {
+    // Порожня група — найчастіше це помилка в коді, а не відсутність людей.
+    if (data.users.length === 0) setStatus('ok', 'у групі поки нікого немає');
+    else setStatus('ok', `${data.users.length} у групі`);
+  } catch {
     setStatus('err', 'немає зв’язку з сервером');
   }
 }
 
 function render() {
+  if (!map) return;
   const now = Date.now();
   const seen = new Set();
 
@@ -161,7 +193,10 @@ function render() {
 
     const marker = state.markers.get(user.uid);
     if (!marker) {
-      const m = L.marker([user.lat, user.lon], { icon: pinIcon(user, now), title: displayName(user) });
+      const m = L.marker([user.lat, user.lon], {
+        icon: pinIcon(user, now),
+        title: displayName(user),
+      });
       m.on('click', () => selectUser(user.uid));
       m.bindPopup(popupHtml(user, now));
       m.addTo(map);
@@ -181,30 +216,69 @@ function render() {
     }
   }
 
-  renderList(now);
+  renderPeople(now);
+  $('people-count').textContent = `${state.users.size} у групі`;
 }
 
-function renderList(now) {
-  const list = $('list');
+function renderPeople(now) {
+  const list = $('people');
   list.textContent = '';
+
+  if (state.users.size === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'people-empty';
+    empty.textContent =
+      'Поки нікого не видно. Переконайтеся, що інші натиснули «Почати» і мають ту саму групу.';
+    list.appendChild(empty);
+    return;
+  }
 
   for (const user of state.users.values()) {
     if (user.lat == null) continue;
     const fresh = isFresh(user.ts, now);
-    const el = document.createElement('div');
-    el.className = 'person' + (state.selected === user.uid ? ' selected' : '');
-    el.innerHTML = `
-      <div class="avatar ${fresh ? 'fresh' : 'stale'}" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
-      <div class="person-meta">
-        <div class="person-name">${escapeHtml(displayName(user))}</div>
-        <div class="person-sub">${timeAgo(user.ts, now)}</div>
-      </div>`;
-    el.onclick = () => selectUser(user.uid);
-    list.appendChild(el);
+
+    const row = document.createElement('div');
+    row.className = 'person' + (state.selected === user.uid ? ' selected' : '');
+
+    if (editing === user.uid) {
+      row.innerHTML = `
+        <div class="avatar" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
+        <div class="person-meta">
+          <input class="rename-input" maxlength="24" value="${escapeHtml(user.name || '')}" placeholder="ім’я">
+        </div>
+        <div class="person-actions">
+          <button class="ok" data-uid="${escapeHtml(user.uid)}">OK</button>
+          <button class="cancel">✕</button>
+        </div>`;
+      const input = row.querySelector('.rename-input');
+      input.focus();
+      input.select();
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') saveRename(user.uid, input.value);
+        if (e.key === 'Escape') cancelRename();
+      };
+    } else {
+      row.innerHTML = `
+        <div class="avatar ${fresh ? 'fresh' : 'stale'}" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
+        <div class="person-meta">
+          <div class="person-name">${escapeHtml(displayName(user))}</div>
+          <div class="person-sub">${timeAgo(user.ts, now)}${user.bat != null ? ' · ' + user.bat + '%' : ''}</div>
+        </div>
+        <div class="person-actions">
+          <button class="edit" data-uid="${escapeHtml(user.uid)}" title="Перейменувати">✎</button>
+        </div>`;
+    }
+
+    row.onclick = (event) => {
+      if (event.target.closest('button') || editing) return;
+      selectUser(user.uid);
+    };
+    list.appendChild(row);
   }
 }
 
 // --- слід ---
+
 async function selectUser(uid) {
   state.selected = uid;
   render();
@@ -213,7 +287,6 @@ async function selectUser(uid) {
     if (id !== uid && layer) map.removeLayer(layer);
   }
   if (!uid) return;
-
   if (state.trails.has(uid)) return;
 
   try {
@@ -224,15 +297,17 @@ async function selectUser(uid) {
     if (!res.ok) throw new Error('http ' + res.status);
     const geo = await res.json();
     const coords = geo.geometry.coordinates || [];
-
     if (coords.length < 2) return;
 
-    const user = state.users.get(uid);
     const layer = L.polyline(
       coords.map(([lon, lat]) => [lat, lon]),
-      { color: userColor(user || { uid }), weight: 4, opacity: 0.65, lineJoin: 'round' },
+      {
+        color: userColor(state.users.get(uid)),
+        weight: 4,
+        opacity: 0.7,
+        lineJoin: 'round',
+      },
     ).addTo(map);
-
     layer.bindPopup(`${geo.properties.count ?? coords.length} точок за ${state.hours} год`);
     state.trails.set(uid, layer);
   } catch {
@@ -248,46 +323,86 @@ async function rename(uid, name) {
       body: JSON.stringify({ code: state.code, uid, name }),
     });
     if (!res.ok) throw new Error('http ' + res.status);
+    cancelRename();
     await poll();
   } catch {
     setStatus('err', 'не вдалося перейменувати');
   }
 }
 
+function saveRename(uid, value) {
+  const name = value.trim();
+  if (!name) return cancelRename();
+  rename(uid, name);
+}
+
+function cancelRename() {
+  editing = null;
+  render();
+}
+
 function fitAll() {
+  if (!map) return;
   const pts = [];
   for (const u of state.users.values()) if (u.lat != null) pts.push([u.lat, u.lon]);
-  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.18));
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2));
   else map.setView([49.84, 24.03], 12);
 }
 
 // --- інтерфейс ---
+
 function setStatus(kind, text) {
-  $('dot').className = kind;
+  $('status-dot').className = kind;
   $('status-text').textContent = text;
 }
 
-function showGate() {
-  $('gate').classList.remove('hidden');
+function flash(text) {
+  const old = $('status-text').textContent;
+  setStatus('ok', text);
+  setTimeout(() => {
+    if ($('status-text').textContent === text) setStatus('ok', old);
+  }, 2000);
+}
+
+async function copy(text, what) {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // старі браузери: тимчасове textarea
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    flash(`${what} скопійовано`);
+  } catch {
+    flash('не вдалося скопіювати');
+  }
+}
+
+function openModal(id) {
+  $(id).classList.add('open');
+}
+function closeModal(id) {
+  $(id).classList.remove('open');
 }
 
 function start() {
   if (started) return;
   started = true;
   $('gate').classList.add('hidden');
+  document.body.classList.add('live');
   initMap();
   poll();
   setInterval(poll, POLL_MS);
 }
 
-document.addEventListener('click', (event) => {
-  const button = event.target.closest('.rename-row button');
-  if (!button) return;
-  const input = button.parentElement.querySelector('input');
-  const value = input.value.trim();
-  if (value) rename(button.dataset.uid, value);
-  else input.value = '';
-});
+// --- події ---
 
 $('btn-fit').onclick = fitAll;
 
@@ -295,30 +410,73 @@ $('btn-hours').onclick = () => {
   const i = HOURS_OPTIONS.indexOf(state.hours);
   state.hours = HOURS_OPTIONS[(i + 1) % HOURS_OPTIONS.length];
   $('btn-hours').textContent = `${state.hours} год`;
-
-  // сліди будуємо наново, бо інтервал змінився
   for (const layer of state.trails.values()) map.removeLayer(layer);
   state.trails.clear();
   if (state.selected) selectUser(state.selected);
 };
 
-$('btn-link').onclick = async () => {
-  const url = location.origin + location.pathname + '#' + encodeURIComponent(state.code);
+$('btn-info').onclick = () => openModal('modal-info');
+
+$('sheet-toggle').onclick = () => {
+  const collapsed = $('sheet').classList.toggle('collapsed');
+  // карпа має перерахувати розмір, бо панель змінює вільну площу
+  document.body.classList.toggle('sheet-collapsed', collapsed);
+  $('sheet-chevron').textContent = collapsed ? '▴' : '▾';
+  setTimeout(() => map && map.invalidateSize(), 60);
+};
+
+$('btn-copy-code').onclick = () => copy(prettyCode(state.code), 'код');
+$('btn-copy-link').onclick = () => copy(groupUrl(), 'посилання');
+$('btn-share').onclick = () => openModal('modal-share');
+
+$('btn-share-native').onclick = async () => {
   try {
-    if (navigator.share) await navigator.share({ title: 'Сімейний трекер', url });
-    else {
-      await navigator.clipboard.writeText(url);
-      setStatus('ok', 'посилання скопійовано');
+    if (navigator.share) {
+      await navigator.share({
+        title: 'Маячок — код групи ' + prettyCode(state.code),
+        text: inviteText(),
+      });
+    } else {
+      await copy(inviteText(), 'запрошення');
     }
   } catch {
     // користувач скасував поділення
   }
 };
 
+$('people').addEventListener('click', (event) => {
+  const ok = event.target.closest('.ok');
+  if (ok) {
+    const row = ok.closest('.person');
+    saveRename(ok.dataset.uid, row.querySelector('.rename-input').value);
+    return;
+  }
+  if (event.target.closest('.cancel')) return cancelRename();
+  const edit = event.target.closest('.edit');
+  if (edit) {
+    editing = edit.dataset.uid;
+    render();
+  }
+});
+
+document.addEventListener('click', (event) => {
+  const closer = event.target.closest('[data-close]');
+  if (closer) return closeModal(closer.dataset.close);
+  // клік по затемненню закриває модалку
+  if (event.target.classList.contains('modal')) closeModal(event.target.id);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeModal('modal-share');
+    closeModal('modal-info');
+  }
+});
+
 $('btn-join').onclick = () => {
   const value = $('code-input').value.trim();
   $('gate-error').textContent = '';
-  if (value.length < 8) {
+  if (cleanCode(value).length < 8) {
     $('gate-error').textContent = 'Код закороткий.';
     return;
   }
@@ -334,7 +492,6 @@ $('btn-create').onclick = async () => {
     const res = await fetch(`${API}/api/create`, { method: 'POST' });
     if (!res.ok) throw new Error('http ' + res.status);
     const data = await res.json();
-    $('code-input').value = data.code;
     setCode(data.code);
   } catch {
     $('gate-error').textContent = 'Не вдалося створити групу. Спробуйте ще раз.';
@@ -343,14 +500,13 @@ $('btn-create').onclick = async () => {
 };
 
 $('code-input').addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') $('btn-join').onclick();
+  if (event.key === 'Enter') $('btn-join').click();
 });
 
 // --- старт ---
+
+$('btn-hours').textContent = `${state.hours} год`;
+
 const initialCode = codeFromHash();
-if (initialCode) {
-  state.code = initialCode;
-  start();
-} else {
-  showGate();
-}
+if (initialCode) applyCode(initialCode);
+else $('gate').classList.remove('hidden');

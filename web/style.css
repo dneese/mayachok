@@ -1,11 +1,12 @@
 :root {
-  --bg: #f4f6f8;
-  --fg: #1c2126;
-  --muted: #6b7680;
-  --line: #dfe4e8;
-  --fresh: #1e9e4a;
-  --stale: #d99a06;
   --accent: #2563eb;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --line: #e2e6ec;
+  --bg: #fff;
+  --fresh: #16a34a;
+  --stale: #d97706;
+  --sheet-h: 46vh;
 }
 
 * { box-sizing: border-box; }
@@ -13,233 +14,384 @@
 html, body {
   margin: 0;
   height: 100%;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   color: var(--fg);
-  background: var(--bg);
+  background: #e8eaee;
+  -webkit-text-size-adjust: 100%;
 }
+
+body { overflow: hidden; }
 
 #map {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  /* панель знизу не перекриває карту, а зменшує її видиму висоту */
+  bottom: var(--sheet-h);
 }
 
-/* --- панель стану --- */
-#panel {
+body.gate-open #map { display: none; }
+
+.hidden { display: none !important; }
+
+/* ---------- верхня панель ---------- */
+
+#topbar {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  right: 12px;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 500;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  display: none;
   gap: 8px;
-  pointer-events: none;
+  align-items: center;
+  padding: 10px 12px;
+  padding-top: calc(10px + env(safe-area-inset-top));
+  background: linear-gradient(#fff, rgba(255, 255, 255, 0.92));
+  border-bottom: 1px solid var(--line);
 }
 
-#status, #controls {
-  pointer-events: auto;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
-  backdrop-filter: blur(6px);
-}
+body.live #topbar { display: flex; }
 
-#status {
+#status-pill {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 7px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: #f1f3f6;
   font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-#dot {
+#status-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--muted);
-  flex-shrink: 0;
+  background: #9aa1ac;
+  flex: none;
 }
-#dot.ok { background: var(--fresh); }
-#dot.err { background: #c0392b; }
+#status-dot.ok { background: var(--fresh); }
+#status-dot.err { background: #dc2626; }
 
-#controls { display: flex; overflow: hidden; }
+#topbar-actions { display: flex; gap: 6px; margin-left: auto; }
 
-#controls button {
+#topbar-actions button {
+  min-width: 40px;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  font-size: 15px;
+  cursor: pointer;
+}
+#topbar-actions button.wide { font-size: 13px; font-weight: 600; }
+#topbar-actions button:active { background: #eef2f7; }
+
+/* ---------- нижня панель ---------- */
+
+#sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 500;
+  display: none;
+  flex-direction: column;
+  height: var(--sheet-h);
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.1);
+}
+
+body.live #sheet { display: flex; }
+
+#sheet-toggle {
+  align-self: center;
+  width: 100%;
+  padding: 6px 0 2px;
   border: 0;
   background: transparent;
-  padding: 9px 12px;
-  font-size: 13px;
+  color: var(--muted);
+  font-size: 15px;
   cursor: pointer;
-  color: var(--fg);
-  border-right: 1px solid var(--line);
-  min-height: 36px;
+  flex: none;
 }
-#controls button:last-child { border-right: 0; }
-#controls button:hover { background: #eef2f6; }
-#controls button.active { color: var(--accent); font-weight: 600; }
 
-/* --- список людей --- */
-#list {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  z-index: 500;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-width: 260px;
+.sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 16px calc(16px + env(safe-area-inset-bottom));
 }
+
+#sheet.collapsed { height: 46px; }
+#sheet.collapsed .sheet-body { display: none; }
+
+body.sheet-collapsed #map { bottom: 46px; }
+
+/* код групи */
+
+.label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.label.muted { font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+.code-head { display: flex; justify-content: space-between; align-items: baseline; }
+
+.code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 27px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 3px 0 10px;
+  word-break: break-all;
+}
+.code.small { font-size: 15px; margin: 2px 0 0; }
+.code.break { word-break: break-all; }
+
+.code-actions { display: flex; gap: 7px; }
+
+.code-actions button, .btn {
+  flex: 1;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+.code-actions .primary, .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.code-actions button:active, .btn:active { opacity: 0.85; }
+
+.hint {
+  margin: 9px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.hint b { color: var(--fg); }
+
+/* люди */
+
+.people-head { display: flex; justify-content: space-between; align-items: baseline; margin: 20px 0 8px; }
 
 .person {
   display: flex;
   align-items: center;
-  gap: 9px;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid var(--line);
+  gap: 11px;
+  padding: 9px 8px;
   border-radius: 10px;
-  padding: 7px 10px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
-  font-size: 13px;
 }
-.person:hover { background: #eef2f6; }
-.person.selected { border-color: var(--accent); }
+.person:active { background: #f4f6f9; }
+.person.selected { background: #eaf1fd; }
 
 .avatar {
-  width: 22px;
-  height: 22px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  flex: none;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
 }
-.avatar.fresh { background: var(--fresh); }
-.avatar.stale { background: var(--stale); }
+.avatar.stale { opacity: 0.55; }
+.avatar.fresh { box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--fresh); }
 
-.person-meta { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
-.person-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.person-sub { color: var(--muted); font-size: 11px; }
+.person-meta { flex: 1; min-width: 0; }
+.person-name {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.person-sub { font-size: 12px; color: var(--muted); margin-top: 1px; }
 
-/* --- маркери --- */
+.person-actions { display: flex; gap: 6px; flex: none; }
+.person-actions button {
+  min-width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+.person-actions .ok { padding: 0 10px; background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+.rename-input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+.people-empty { padding: 10px 2px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+
+/* ---------- маркери на карті ---------- */
+
 .pin {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 3px solid #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-  background: var(--fresh);
+  background: var(--c);
+  box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0, 0, 0, 0.35);
 }
-.pin.stale { background: var(--stale); }
+.pin.fresh { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(22, 163, 74, 0.35), 0 1px 4px rgba(0, 0, 0, 0.35); }
+/* застарілий не змінює колір людини, а лише стає тьмянішим із сірим кільцем */
+.pin.stale { opacity: 0.6; box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(156, 163, 175, 0.5); }
 
-.leaflet-popup-content { margin: 10px 12px; font-size: 13px; }
-.leaflet-popup-content b { font-size: 14px; }
+.leaflet-popup-content { font-size: 13px; line-height: 1.55; }
+.leaflet-popup-content .meta { margin-top: 6px; color: var(--muted); font-size: 11px; }
 
-.rename-row { display: flex; gap: 4px; margin-top: 8px; }
-.rename-row input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 7px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  font-size: 13px;
-}
-.rename-row button {
-  padding: 5px 9px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  font-size: 12px;
-}
+/* ---------- модалки ---------- */
 
-/* --- вхід --- */
-#gate {
-  position: absolute;
+.modal {
+  position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 900;
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(15, 20, 30, 0.45);
+}
+
+@media (min-width: 640px) {
+  .modal { align-items: center; }
+}
+
+.modal.open { display: flex; }
+
+.modal-box {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
+  background: #fff;
+  border-radius: 18px 18px 0 0;
+}
+
+@media (min-width: 640px) { .modal-box { border-radius: 18px; } }
+
+.modal-box h2 { margin: 0 0 6px; font-size: 19px; }
+.modal-box h3 { margin: 20px 0 6px; font-size: 15px; }
+
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f3f6;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.modal-lead { margin: 0 0 16px; font-size: 13px; line-height: 1.55; color: var(--muted); }
+
+.field { margin-bottom: 14px; }
+
+.steps {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.steps li { margin-bottom: 4px; }
+
+.modal-actions { display: flex; gap: 8px; margin-top: 18px; }
+.modal-actions.column { flex-direction: column; }
+.modal-actions button { flex: 1; padding: 11px; border: 1px solid var(--line); border-radius: 9px; background: #fff; font-size: 14px; font-weight: 600; cursor: pointer; }
+.modal-actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ---------- екран входу ---------- */
+
+#gate {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(244, 246, 248, 0.97);
   padding: 20px;
+  overflow-y: auto;
+  background: #eef1f5;
 }
-#gate.hidden { display: none; }
 
 .gate-box {
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 26px 22px;
-  max-width: 340px;
   width: 100%;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  max-width: 400px;
+  padding: 26px 22px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.09);
 }
 
-.gate-box h1 { margin: 0 0 8px; font-size: 20px; }
-.gate-lead { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.18);
+}
+.brand-name { font-size: 22px; font-weight: 700; }
+
+.gate-lead { margin: 0 0 20px; font-size: 14px; line-height: 1.55; color: var(--muted); }
 
 #code-input {
   width: 100%;
-  padding: 11px 12px;
+  padding: 13px;
   border: 1px solid var(--line);
-  border-radius: 9px;
-  font-size: 15px;
-  font-family: ui-monospace, monospace;
-  margin-bottom: 10px;
+  border-radius: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 17px;
+  letter-spacing: 0.04em;
 }
+#code-input:focus { outline: none; border-color: var(--accent); }
 
-.gate-actions { display: flex; gap: 8px; }
-
+.gate-actions { display: flex; gap: 8px; margin-top: 10px; }
 .gate-actions button {
   flex: 1;
-  padding: 11px;
-  border-radius: 9px;
+  padding: 12px;
   border: 1px solid var(--line);
+  border-radius: 10px;
   background: #fff;
   font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
 }
-.gate-actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.gate-actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gate-actions button:disabled { opacity: 0.5; }
 
-/* --- посилання на завантаження та інструкція --- */
-.links { display: flex; flex-direction: column; gap: 7px; margin: 16px 0; }
+.gate-error { min-height: 18px; margin: 8px 0 0; font-size: 13px; color: #dc2626; }
 
-.links a {
-  display: block;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: #f7f9fb;
-  color: var(--accent);
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-}
-.links a:hover { background: #eef3f9; border-color: #c7d6e8; }
+.gate-details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+.gate-details summary { font-size: 13px; font-weight: 600; color: var(--accent); cursor: pointer; }
+.gate-details .btn { display: block; margin-top: 12px; }
 
-.gate-help { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
-
-.howto {
-  margin: 0 0 16px;
-  padding: 12px 14px;
-  background: #f7f9fb;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.6;
-}
-.howto b { color: var(--fg); display: block; margin-bottom: 4px; font-size: 12px; }
-.howto ol { margin: 6px 0 0; padding-left: 18px; }
-.howto li { margin-bottom: 3px; }
-
-.gate-note { margin: 14px 0 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
-.gate-error { margin: 10px 0 0; font-size: 12px; color: #c0392b; min-height: 16px; }
+.gate-note { margin: 16px 0 0; font-size: 11px; line-height: 1.5; color: #9aa1ac; }
+.gate-note b { color: var(--muted); }

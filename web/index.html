@@ -2,9 +2,10 @@
 <html lang="uk">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
 <meta name="robots" content="noindex, nofollow">
-<title>Сімейний трекер</title>
+<title>Маячок — сімейний GPS-трекер</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -12,45 +13,130 @@
 
 <div id="map"></div>
 
-<div id="panel">
-  <div id="status"><span id="dot"></span><span id="status-text">Підключення…</span></div>
-  <div id="controls">
-    <button id="btn-fit" title="Показати всіх">⌖</button>
-    <button id="btn-hours" title="Історія">12 год</button>
-    <button id="btn-link" title="Поділитися посиланням">🔗</button>
+<!-- верхня панель -->
+<div id="topbar">
+  <div id="status-pill">
+    <span id="status-dot"></span>
+    <span id="status-text">підключення…</span>
+  </div>
+  <div id="topbar-actions">
+    <button id="btn-fit" title="Показати всіх" aria-label="Показати всіх">⌖</button>
+    <button id="btn-hours" class="wide" title="Скільки історії показувати">12 год</button>
+    <button id="btn-info" title="Про групу і застосунок" aria-label="Про групу">ⓘ</button>
   </div>
 </div>
 
-<div id="list"></div>
+<!-- нижня панель -->
+<div id="sheet">
+  <button id="sheet-toggle" aria-label="Згорнути"><span id="sheet-chevron">▾</span></button>
 
-<div id="gate">
-  <div class="gate-box">
-    <h1>Маячок</h1>
-    <p class="gate-lead">Сімейний GPS-трекер у режимі реального часу. Усі бачать один одного на карті.</p>
+  <div class="sheet-body">
+    <section class="code-block">
+      <div class="code-head">
+        <span class="label">Код групи</span>
+        <span id="people-count" class="label muted">—</span>
+      </div>
+      <div id="code-value" class="code">…</div>
+      <div class="code-actions">
+        <button id="btn-copy-code" class="primary">Скопіювати код</button>
+        <button id="btn-copy-link">Скопіювати посилання</button>
+        <button id="btn-share">Поділитися</button>
+      </div>
+      <p class="hint">Цей код потрібен, щоб інші могли вступити. Надішліть його або посилання.</p>
+    </section>
 
-    <div class="links">
-      <a href="https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk" target="_blank" rel="noopener">Завантажити APK (Android)</a>
-      <a href="https://github.com/dneese/mayachok" target="_blank" rel="noopener">Про проєкт на GitHub</a>
+    <section class="people-block">
+      <div class="people-head">
+        <span class="label">Люди</span>
+        <span class="label muted">натисніть, щоб побачити слід</span>
+      </div>
+      <div id="people"></div>
+    </section>
+  </div>
+</div>
+
+<!-- модалка: поділитися -->
+<div id="modal-share" class="modal">
+  <div class="modal-box">
+    <button class="modal-close" data-close="modal-share" aria-label="Закрити">✕</button>
+    <h2>Поділитися групою</h2>
+    <p class="modal-lead">Надішліть посилання — воно вже містить код, тож іншим не треба нічого вводити вручну.</p>
+
+    <div class="field">
+      <span class="label">Код</span>
+      <code id="share-code" class="code small">—</code>
+    </div>
+    <div class="field">
+      <span class="label">Посилання</span>
+      <code id="share-link" class="code small break">—</code>
     </div>
 
-    <p class="gate-help">Введіть код групи або створіть нову групу.</p>
-    <input id="code-input" type="text" placeholder="код групи" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="modal-actions">
+      <button id="btn-share-native" class="primary">Поділитися…</button>
+      <button data-close="modal-share">Закрити</button>
+    </div>
+    <p class="hint">Код живе у частині адреси після <b>#</b>. Тому сервер його не бачить
+      і він не потрапляє в журнали. Сервер бачить лише короткий хеш.</p>
+  </div>
+</div>
+
+<!-- модалка: інформація -->
+<div id="modal-info" class="modal">
+  <div class="modal-box">
+    <button class="modal-close" data-close="modal-info" aria-label="Закрити">✕</button>
+    <h2>Як це працює</h2>
+    <ol class="steps">
+      <li>Кожен встановлює застосунок і вводить код групи.</li>
+      <li>Натискає «Почати» — дозволяє геолокацію.</li>
+      <li>Трекер працює у фоні й надсилає точку кожні 30 секунд.</li>
+      <li>Усі групу бачать один одного на цій мапі.</li>
+    </ol>
+
+    <h3>Як додати людину</h3>
+    <ol class="steps">
+      <li>Надішліть їй посилання на цю групу.</li>
+      <li>Вона встановлює APK з посилання нижче.</li>
+      <li>Вводить ім’я та код, натискає «Почати».</li>
+    </ol>
+
+    <div class="modal-actions column">
+      <a class="btn primary" href="https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk" target="_blank" rel="noopener">Завантажити APK (Android)</a>
+      <a class="btn" href="https://github.com/dneese/mayachok" target="_blank" rel="noopener">Проєкт на GitHub</a>
+    </div>
+
+    <h3>Коли не видно людей</h3>
+    <p class="modal-lead">Маркер зникає через 30 хв без оновлень — щоб не показувати «де був» як «де є».
+      Перевірте, чи ввімкнено GPS, і чи не зупинено трекер у шторці повідомлень.</p>
+  </div>
+</div>
+
+<!-- екран входу -->
+<div id="gate">
+  <div class="gate-box">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span class="brand-name">Маячок</span>
+    </div>
+    <p class="gate-lead">Сімейний GPS-трекер у реальному часі. Усі бачать один одного на карті.</p>
+
+    <input id="code-input" type="text" placeholder="код групи" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text">
     <div class="gate-actions">
       <button id="btn-join" class="primary">Увійти</button>
       <button id="btn-create">Створити групу</button>
     </div>
-    <p class="gate-note">Код зберігається в адресному рядку (#)... Він нікуди не надсилається окремо — тільки разом із запитом.</p>
     <p id="gate-error" class="gate-error"></p>
 
-    <div class="howto">
-      <b>Як це працює</b>
-      <ol>
-        <li>Відкрийте посилання групи або створіть свою.</li>
+    <details class="gate-details">
+      <summary>Як це працює</summary>
+      <ol class="steps">
         <li>Надішліть посилання родичі чи друзям.</li>
-        <li>Кожен ставить APK, вводить ім’я й код, натискає «Почати».</li>
-        <li>Усі з’являються на карті; імена змінюються на цій сторінці.</li>
+        <li>Кожен ставить застосунок, вводить ім’я й код.</li>
+        <li>Усі з’являються один в одного на карті.</li>
       </ol>
-    </div>
+      <a class="btn primary" href="https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk" target="_blank" rel="noopener">Завантажити APK (Android)</a>
+    </details>
+
+    <p class="gate-note">Код залишається в адресному рядку після <b>#</b> — сервер його не бачить.</p>
   </div>
 </div>
 

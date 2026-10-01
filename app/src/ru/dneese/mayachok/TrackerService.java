@@ -35,6 +35,7 @@ public final class TrackerService extends Service implements LocationListener {
 
   private double lastLat;
   private double lastLon;
+  private float lastAcc;
   private boolean haveFix;
 
   @Override
@@ -79,8 +80,11 @@ public final class TrackerService extends Service implements LocationListener {
         return;
       }
 
+      // minTime дорівнює інтервалу: інакше GPS смикається без пауз і
+      // ми надсилали б точку на кожному оновленні, ігноруючи вибір користувача.
+      long minTime = prefs.intervalSeconds() * 1000L;
       locationManager.requestLocationUpdates(
-          LocationManager.GPS_PROVIDER, 0L, 0f, this, handlerThread.getLooper());
+          LocationManager.GPS_PROVIDER, minTime, 0f, this, handlerThread.getLooper());
 
       // Остання відома позиція — щоб не чекати холодного старту.
       Location last = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
@@ -99,10 +103,11 @@ public final class TrackerService extends Service implements LocationListener {
   public void onLocationChanged(Location location) {
     lastLat = location.getLatitude();
     lastLon = location.getLongitude();
+    lastAcc = location.getAccuracy();
     haveFix = true;
     updateNotification("Остання точка: " + location.getTime() / 1000);
-    // Надсилаємо одразу, не чекаючи таймера, щоб мапа реагувала швидко.
-    sendNow();
+    // Надсилає не подія, а таймер у sendNow(): інакше разом із таймером
+    // отримали б дві точки за інтервал. Таймер сам бере найсвіжішу позицію.
   }
 
   @Override
@@ -122,7 +127,7 @@ public final class TrackerService extends Service implements LocationListener {
 
   private void sendNow() {
     if (!haveFix) return;
-    api.send(lastLat, lastLon, 0f,
+    api.send(lastLat, lastLon, lastAcc,
         new Api.Callback() {
           @Override
           public void onResult(String error) {
