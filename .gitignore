@@ -1,0 +1,22 @@
+# Збірка
+app/build/
+app/*.apk
+app/src/ru/dneese/mayachok/BuildConfig.java
+
+# Деплой
+.deploy/
+
+# Секрети (у жодному разі не комітити)
+*.keystore
+*.jks
+secrets.local.sh
+.env
+
+# Pages
+_site/
+
+# Системне
+.DS_Store
+Thumbs.db
+*.log
+node_modules/

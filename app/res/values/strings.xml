@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Маячок</string>
+
+    <string name="label_name">Ваше ім\'я</string>
+    <string name="hint_name">Наприклад Олена</string>
+
+    <string name="label_code">Код групи</string>
+    <string name="hint_code">вставте код групи</string>
+
+    <string name="label_api">Адреса сервера</string>
+    <string name="hint_api">https://…</string>
+
+    <string name="label_interval">Як часто надсилати</string>
+    <string name="note_battery">Частіше — точніше, але швидше сідає батарея.</string>
+
+    <string name="btn_save">Зберегти</string>
+    <string name="btn_start">Почати</string>
+</resources>

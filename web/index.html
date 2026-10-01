@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="robots" content="noindex, nofollow">
+<title>Сімейний трекер</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <div id="status"><span id="dot"></span><span id="status-text">Підключення…</span></div>
+  <div id="controls">
+    <button id="btn-fit" title="Показати всіх">⌖</button>
+    <button id="btn-hours" title="Історія">12 год</button>
+    <button id="btn-link" title="Поділитися посиланням">🔗</button>
+  </div>
+</div>
+
+<div id="list"></div>
+
+<div id="gate">
+  <div class="gate-box">
+    <h1>Сімейний трекер</h1>
+    <p class="gate-lead">Введіть код групи, який дав вам інший учасник, або створіть нову групу.</p>
+    <input id="code-input" type="text" placeholder="код групи" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="gate-actions">
+      <button id="btn-join" class="primary">Увійти</button>
+      <button id="btn-create">Створити групу</button>
+    </div>
+    <p class="gate-note">Код залишається лише в адресі браузера. На сервер він не потрапляє.</p>
+    <p id="gate-error" class="gate-error"></p>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

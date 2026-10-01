@@ -1,0 +1,60 @@
+name: build-apk
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Встановити JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Визначити SDK-інструменти
+        id: sdk
+        run: |
+          BT=$(ls -1d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          PLATFORM=$(ls -1d "$ANDROID_HOME"/platforms/android-3[4-9]/ 2>/dev/null | sort -V | tail -1)
+          echo "build_tools=$BT"    >> "$GITHUB_OUTPUT"
+          echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+          echo "build-tools: $BT"
+          echo "platform:    $PLATFORM"
+
+      - name: Зібрати APK
+        run: |
+          cd app
+          export AAPT2="${{ steps.sdk.outputs.build_tools }}aapt2"
+          export APKSIGNER="${{ steps.sdk.outputs.build_tools }}apksigner"
+          export ANDROID_JAR="${{ steps.sdk.outputs.platform }}android.jar"
+          bash build.sh
+
+      - name: Завантажити артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: mayachok-apk
+          path: app/build/*.apk
+          if-no-files-found: error
+
+      - name: Опублікувати в Releases
+        if: startsWith(github.ref, 'refs/heads/main')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/*.apk
+          body: |
+            Автозбірка Android-застосунку «Маячок».
+
+            Інсталюйте APK на телефон, відкрийте «Маячок», введіть код групи
+            і натисніть «Почати».
