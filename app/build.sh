@@ -61,14 +61,14 @@ if [ -z "$ANDROID_JAR_PATH" ]; then
 fi
 
 rm -rf "$OUT"
-mkdir -p "$OUT"/{compiled,gen,classes,dex}
+mkdir -p "$OUT"/{compiled,gen,classes,dex,tmp}
 
 echo "==> 1/6 aapt2 compile (ресурси)"
 "$AAPT2" compile --dir res -o "$OUT/compiled/res.zip"
 
 echo "==> 2/6 aapt2 link (resources + manifest)"
 "$AAPT2" link \
-  -o "$OUT/base.apk" \
+  -o "$OUT/tmp/base.apk" \
   -I "$ANDROID_JAR_PATH" \
   --manifest AndroidManifest.xml \
   -R "$OUT/compiled/res.zip" \
@@ -115,9 +115,9 @@ find "$OUT/classes" -name '*.class' > "$OUT/classlist.txt"
   @"$OUT/classlist.txt"
 
 echo "==> 5/6 пакуємо APK"
-cp "$OUT/base.apk" "$OUT/app-unsigned.apk"
+cp "$OUT/tmp/base.apk" "$OUT/tmp/app-unsigned.apk"
 # Після cd шлях має бути абсолютним, інакше zip не знайде архів.
-ABS_UNSIGNED="$PWD/$OUT/app-unsigned.apk"
+ABS_UNSIGNED="$PWD/$OUT/tmp/app-unsigned.apk"
 if command -v zip >/dev/null 2>&1; then
   (cd "$OUT/dex" && zip -q -X "$ABS_UNSIGNED" classes.dex)
 else
@@ -155,7 +155,7 @@ APK_NAME="mayachok-${VERSION_NAME}.apk"
   --ks-key-alias gps \
   --min-sdk-version 21 \
   --out "$OUT/$APK_NAME" \
-  "$OUT/app-unsigned.apk"
+  "$OUT/tmp/app-unsigned.apk"
 
 "$APKSIGNER" verify "$OUT/$APK_NAME"
 

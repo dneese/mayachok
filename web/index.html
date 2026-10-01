@@ -25,15 +25,32 @@
 
 <div id="gate">
   <div class="gate-box">
-    <h1>Сімейний трекер</h1>
-    <p class="gate-lead">Введіть код групи, який дав вам інший учасник, або створіть нову групу.</p>
+    <h1>Маячок</h1>
+    <p class="gate-lead">Сімейний GPS-трекер у режимі реального часу. Усі бачать один одного на карті.</p>
+
+    <div class="links">
+      <a href="https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk" target="_blank" rel="noopener">Завантажити APK (Android)</a>
+      <a href="https://github.com/dneese/mayachok" target="_blank" rel="noopener">Про проєкт на GitHub</a>
+    </div>
+
+    <p class="gate-help">Введіть код групи або створіть нову групу.</p>
     <input id="code-input" type="text" placeholder="код групи" autocomplete="off" autocapitalize="off" spellcheck="false">
     <div class="gate-actions">
       <button id="btn-join" class="primary">Увійти</button>
       <button id="btn-create">Створити групу</button>
     </div>
-    <p class="gate-note">Код залишається лише в адресі браузера. На сервер він не потрапляє.</p>
+    <p class="gate-note">Код зберігається в адресному рядку (#)... Він нікуди не надсилається окремо — тільки разом із запитом.</p>
     <p id="gate-error" class="gate-error"></p>
+
+    <div class="howto">
+      <b>Як це працює</b>
+      <ol>
+        <li>Відкрийте посилання групи або створіть свою.</li>
+        <li>Надішліть посилання родичі чи друзям.</li>
+        <li>Кожен ставить APK, вводить ім’я й код, натискає «Почати».</li>
+        <li>Усі з’являються на карті; імена змінюються на цій сторінці.</li>
+      </ol>
+    </div>
   </div>
 </div>
 

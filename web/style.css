@@ -209,5 +209,37 @@ html, body {
 }
 .gate-actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
 
+/* --- посилання на завантаження та інструкція --- */
+.links { display: flex; flex-direction: column; gap: 7px; margin: 16px 0; }
+
+.links a {
+  display: block;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f7f9fb;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.links a:hover { background: #eef3f9; border-color: #c7d6e8; }
+
+.gate-help { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+
+.howto {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  background: #f7f9fb;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.howto b { color: var(--fg); display: block; margin-bottom: 4px; font-size: 12px; }
+.howto ol { margin: 6px 0 0; padding-left: 18px; }
+.howto li { margin-bottom: 3px; }
+
 .gate-note { margin: 14px 0 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
 .gate-error { margin: 10px 0 0; font-size: 12px; color: #c0392b; min-height: 16px; }

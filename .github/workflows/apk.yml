@@ -47,7 +47,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mayachok-apk
-          path: app/build/*.apk
+          path: app/build/mayachok-*.apk
           if-no-files-found: error
 
       # Releases вимагає тег, тож публікуємо лише для push у refs/tags/v*
@@ -55,7 +55,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/*.apk
+          files: app/build/mayachok-*.apk
           body: |
             Автозбірка Android-застосунку «Маячок».
 
