@@ -287,7 +287,13 @@ function renderPeople(now) {
     } else {
       // Людина, що щойно приєдналася, ще не має точки — показуємо це прямо,
       // щоб не здавалося, що вона зникла або не прийшла.
-      const sub = hasFix ? timeAgo(user.ts, now) : 'чекаємо сигнал GPS';
+      // Учасник, який лише пише в чаті, координат не передає — йому не
+      // треба чекати на GPS, бо він і не збирається його ввімкнути.
+      const sub = hasFix
+        ? timeAgo(user.ts, now)
+        : user.role === 'chat'
+          ? 'у чаті, без GPS'
+          : 'чекаємо сигнал GPS';
       row.innerHTML = `
         <div class="avatar ${hasFix && fresh ? 'fresh' : 'stale'}${hasFix ? '' : ' waiting'}" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
         <div class="person-meta">
