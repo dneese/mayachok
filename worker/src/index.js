@@ -12,7 +12,11 @@ const GROUP_RETENTION_DAYS = 30; // група без активності те�
 // (див. TrackerService), а last_seen ми тротлимо, бо інакше кожна
 // перевірка «я в мережі» писала б у базу.
 const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
-const FRESH_MINUTES = 15; // після цього маркер сіріє (не зникає)
+// Маркер сіріє після 30 хв. Рівно стільки ж триває найдовший «подих»
+// від телефона (див. HEARTBEAT_MAX_MS): якщо лежача людина ще не сіра, то
+// її дані свіжі. Раніше було 15 — тоді вона б виглядала «невидимою»
+// щохвилини після 15, хоча ми точно знаємо, де вона.
+const FRESH_MINUTES = 30;
 const MAX_NAME_LEN = 24;
 const MAX_BODY_LEN = 500; // довжина одного повідомлення
 const CHAT_RETENTION_DAYS = 7; // стільки тримаємо переписку
@@ -35,6 +39,85 @@ function newCode() {
 function normalizeCode(code) {
   if (typeof code !== 'string') return '';
   return code.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Кеш відповіді мапи в пам'яті інстансу Worker.
+ *
+ * Навіщо: D1 лімітований на 5 млн прочитаних рядків на добо, і без кешу
+ * кожен глядач читав би базу окремо. 2 000 людей, які дивляться одну групу,
+ * зробили б 2 000 читань замість одного на 5 секунд.
+ *
+ * Тримаємо й останню вдалу відповідь окремо: якщо D1 раптом недоступний
+ * або вичерпав ліміт (тоді падають усі запити, включно з читанням), група
+ * все одно показує останні відомі дані, а не порожню карту.
+ */
+const groupCache = new Map();   // gid -> { at, body }
+let lastGoodBody = null;        // що показати, коли база недоступна
+const GROUP_CACHE_MS = 5000;
+
+/**
+ * Рейт-ліміт на запис координат.
+ *
+ * Навіщо це терміново, а не «для галочки»: ліміт D1 спільний на всі
+ * запити, і коли він вичерпаний — падають УСІ запити, включно з читанням.
+ * Тобто один телефон із зламаним циклом (або хтось, хто просто покрутив
+ * кнопку 100 разів) гасить карту в усіх групах. Межа тримає такий випадок
+ * від межі.
+ *
+ * Ліміт у пам'яті інстансу, без запису в базу: інакше ми б витрачали
+ * запис, щоб захистити себе від запису.
+ */
+const writeGuard = new Map();  // uid -> час останнього прийнятого запису
+const WRITE_MIN_GAP_MS = 8000; // менше 8 секунд між точками — це не людина
+
+// Лічильники за поточним інстансом.
+//
+// Чесно про їхню цінність: вони живуть у пам'яті одного інстансу Worker, а
+// Cloudflare розсипає запити по різних інстансах. Тому картина в /api/health
+// часто нульова навіть після реального навантаження. Це НЕ придатний
+// тригер для алерту.
+//
+// Надійний сигнал про наближення ліміту дає сам Cloudflare: лимит D1
+// приходить поштою, а метрики — у розділі D1 → Metrics → Row Metrics.
+// Тримаємо лічильники як підказку «щось тут відбулося», а не як охорону.
+const meters = { writes: 0, throttled: 0, cacheHits: 0, dbErrors: 0 };
+
+function rateLimited(uid) {
+  const last = writeGuard.get(uid);
+  if (!last) return false;
+  return Date.now() - last < WRITE_MIN_GAP_MS;
+}
+
+function markWrite(uid) {
+  writeGuard.set(uid, Date.now());
+  // Не даємо мапі розростися: забуваємо те, що мовчало понад хвилину.
+  if (writeGuard.size > 5000) {
+    for (const [key, at] of writeGuard) {
+      if (Date.now() - at > 60_000) writeGuard.delete(key);
+      if (writeGuard.size <= 4000) break;
+    }
+  }
+}
+
+function cacheGet(gid) {
+  const hit = groupCache.get(gid);
+  if (!hit) return null;
+  // Повертаємо саме тіло відповіді, а не запис кешу — інакше клієнт
+  // отримав би {at, body} замість списку людей.
+  return Date.now() - hit.at < GROUP_CACHE_MS ? hit.body : null;
+}
+
+function cachePut(gid, body) {
+  // Не даємо мапі розростися на весь акаунт: групи, які ніхто не дивиться,
+  // давно мертві й нам не потрібні.
+  if (groupCache.size > 500) {
+    for (const [key, value] of groupCache) {
+      if (Date.now() - value.at > GROUP_CACHE_MS) groupCache.delete(key);
+      if (groupCache.size <= 400) break;
+    }
+  }
+  groupCache.set(gid, { at: Date.now(), body });
 }
 
 function json(data, status = 200) {
@@ -246,7 +329,13 @@ async function handleIngest(request, db) {
   const acc = isFiniteNumber(params.get('acc'), 0, 100000) ? Number(params.get('acc')) : null;
   const bat = isFiniteNumber(params.get('bat'), 0, 100) ? Math.round(Number(params.get('bat'))) : null;
 
-  const uid = await upsertUser(db, gid, params.get('uid'), params.get('name'));
+  const requested = params.get('uid');
+  if (requested && rateLimited(requested)) {
+    meters.throttled++;
+    return json({ ok: true, throttled: true, ts: Number(params.get('t')) || Date.now() });
+  }
+
+  const uid = await upsertUser(db, gid, requested, params.get('name'));
   const user = await db.prepare('SELECT name FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).first();
 
   // Остання точка пишеться в рядок учасника, а не в журнал. Так база не
@@ -261,6 +350,8 @@ async function handleIngest(request, db) {
     .bind(gid, uid, Number(lat), Number(lon), acc, bat, ts)
     .run();
 
+  markWrite(uid);
+  meters.writes++;
   return json({ ok: true, uid, name: user ? user.name : null, ts });
 }
 
@@ -268,6 +359,13 @@ async function handleGroup(request, db) {
   const params = await readParams(request);
   const gid = await groupIdFor(params.get('code'));
   if (!gid) return bad('invalid code');
+
+  // Свіжий кеш — віддаємо одразу, базу не чіпаємо.
+  const hit = cacheGet(gid);
+  if (hit) {
+    meters.cacheHits++;
+    return json(hit);
+  }
 
   // Раніше тут стояв фільтр «ховати учасника через 30 хв» — і людина зникала
   // з карти безслідно. Тепер віддаємо всіх: стара точка лишається сірою
@@ -285,7 +383,7 @@ async function handleGroup(request, db) {
     .bind(gid)
     .all();
 
-  return json({
+  const body = {
     now: Date.now(),
     // Після скількох хвилин без точок маркер стає сірим. Не зникає —
     // просто видно, що це останнє відоме місце, а не «зараз тут».
@@ -295,7 +393,11 @@ async function handleGroup(request, db) {
     // Усі учасники вікна, навіть без координат: щойно додана людина
     // має бути видна як «чекаємо GPS», а не зникати до першої точки.
     users: results,
-  });
+  };
+
+  cachePut(gid, body);
+  lastGoodBody = body;
+  return json(body);
 }
 
 /**
@@ -312,6 +414,9 @@ async function handleLeave(request, db) {
 
   const points = await db.prepare('DELETE FROM points WHERE gid = ?1 AND uid = ?2').bind(gid, uid).run();
   const user = await db.prepare('DELETE FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).run();
+
+  // Кеш скидаємо: людина вийшла — її не має бути на карті навіть на секунду.
+  groupCache.delete(gid);
 
   return json({
     ok: true,
@@ -332,6 +437,7 @@ async function handleRename(request, db) {
   if (!name) return bad('name required');
 
   await db.prepare('UPDATE users SET name = ?1 WHERE uid = ?2 AND gid = ?3').bind(name, uid, gid).run();
+  groupCache.delete(gid); // нове ім'я має з'явитися на карті одразу
 
   // Перевіряємо через SELECT, а не за лічильником змін — він нестабільний між версіями D1.
   const found = await db.prepare('SELECT name FROM users WHERE uid = ?1 AND gid = ?2').bind(uid, gid).first();
@@ -340,8 +446,16 @@ async function handleRename(request, db) {
 }
 
 async function handleHealth(db) {
-  const { results } = await db.prepare('SELECT COUNT(*) AS n FROM points').all();
-  return json({ ok: true, points: results.length, time: Date.now() });
+  // Лічильники навмисно без запиту в базу: /api/health часто перевіряють
+  // моніторингом, і не варто через це витрачати ліміт читання.
+  return json({
+    ok: true,
+    time: Date.now(),
+    // Нагадування про ліміти D1, щоб не тримати їх у голові:
+    // 100 000 записів і 5 млн прочитаних рядків на добу, безкоштовно.
+    meters,
+    limits: { writesPerDay: 100000, rowsReadPerDay: 5000000 },
+  });
 }
 
 
@@ -387,7 +501,26 @@ export default {
       if (path === '/api/create' && request.method === 'POST') return await handleCreate(db);
       if (path === '/api/join') return await handleJoin(request, db);
       if (path === '/api/ingest') return await handleIngest(request, db);
-      if (path === '/api/group') return await handleGroup(request, db);
+      if (path === '/api/group') {
+        try {
+          return await handleGroup(request, db);
+        } catch (error) {
+          // D1 недоступний або вичерпав денний ліміт: тоді падають усі
+          // запити, і без цієї гілки карта стала б порожньою в усіх.
+          // Краще показати дані, яким трохи застаріли, ніж порожнечу.
+          meters.dbErrors++;
+          if (lastGoodBody) {
+            const stale = json({
+              ...lastGoodBody,
+              stale: true,
+              staleReason: 'database unavailable',
+            });
+            stale.headers.set('Warning', '110 mayachok "Response is Stale"');
+            return stale;
+          }
+          throw error;
+        }
+      }
       if (path === '/api/rename') return await handleRename(request, db);
       if (path === '/api/leave') return await handleLeave(request, db);
       if (path === '/api/say') return await handleSay(request, db);

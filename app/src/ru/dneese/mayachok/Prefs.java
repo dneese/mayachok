@@ -49,9 +49,9 @@ public final class Prefs {
 
   public int intervalSeconds() {
     try {
-      return Integer.parseInt(sp.getString("interval", "30"));
+      return Integer.parseInt(sp.getString("interval", "60"));
     } catch (NumberFormatException error) {
-      return 30;
+      return 60;
     }
   }
 

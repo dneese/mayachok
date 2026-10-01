@@ -3,8 +3,12 @@
 const API = 'https://mayachok.kikikiska.workers.dev';
 const PROJECT_URL = 'https://github.com/dneese/mayachok';
 
-const POLL_MS = 10000;
-const CHAT_POLL_MS = 3000;
+// Опитування мапи: 15 секунд. Раніше 10 — різниця не помітна оком,
+// а запитів на 1/3 менше.
+const POLL_MS = 15000;
+// Чат: 5 секунд замість 3. Людина читає повідомлення очима, а не очима
+// програміста — 3 секунди нічого не додає, а батарею їсть.
+const CHAT_POLL_MS = 5000;
 const FRESH_MS = 2 * 60 * 1000;
 
 const state = {
@@ -22,6 +26,8 @@ const state = {
 
 let map = null;
 let started = false;
+let mapTimer = null;
+let chatTimer = null;
 let editing = null; // uid, чию саме ім'я редагують
 
 const $ = (id) => document.getElementById(id);
@@ -620,11 +626,26 @@ function start() {
   $('gate').classList.add('hidden');
   document.body.classList.add('live');
   poll();
-  setInterval(poll, POLL_MS);
+  mapTimer = setInterval(poll, POLL_MS);
 
   // чат питаємо частіше — повідомлення мають з'являтися одразу
   pollChat();
-  setInterval(pollChat, CHAT_POLL_MS);
+  chatTimer = setInterval(pollChat, CHAT_POLL_MS);
+
+  // Закрили вкладку або сховали її — зупиняємо обидва таймери. Без цього
+  // вкладка «у фоні» робила б ~26 тисяч запитів на добу й не давала
+  // заснути телефону.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      clearInterval(mapTimer);
+      clearInterval(chatTimer);
+    } else {
+      poll();
+      pollChat();
+      mapTimer = setInterval(poll, POLL_MS);
+      chatTimer = setInterval(pollChat, CHAT_POLL_MS);
+    }
+  });
 }
 
 // --- події ---

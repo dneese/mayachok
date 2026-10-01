@@ -39,10 +39,11 @@ public final class ChatService extends Service {
   private static final int NOTIFY_ALERT = 44;
 
   /**
-   * Інтервал у фоні навмисно довший за 4 секунди на екрані: у фоні важлива
-   * батарея, а повідомлення від родичі не термінові на секунди.
+   * Інтервал у фоні. Було 20 секунд — це 4 320 пробуджень радіо на добу
+   * навіть коли застосунок закритий. Хвилина — це раз на 15 менше, а
+   * повідомлення від родичі все одно не термінові на секунди.
    */
-  private static final long POLL_MS = 20000L;
+  private static final long POLL_MS = 60 * 1000L;
 
   private Api api;
   private Prefs prefs;

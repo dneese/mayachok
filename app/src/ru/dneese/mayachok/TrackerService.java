@@ -28,8 +28,17 @@ public final class TrackerService extends Service implements LocationListener {
   private static final int NOTIFICATION_ID = 42;
 
   // Умови, за яких телефон вважає, що точку варто надсилати.
-  private static final double SEND_MIN_METERS = 20.0;
-  private static final long SEND_MAX_GAP_MS = 5 * 60 * 1000L;
+  //
+  // 100 метрів — це компроміс. Менше — телефон надсилає точку на кожному
+  // кроці й GPS працює майже постійно. Більше — карта стає неточною там,
+  // де треба знати, що людина вже дійшла.
+  private static final double SEND_MIN_METERS = 100.0;
+  // Нижче цієї відстані вважаємо, що телефон лежить нерухомо (дрейф GPS).
+  private static final double STILL_METERS = 25.0;
+  // «Подих», щоб група бачила, що людина жива, навіть коли не рухається.
+  private static final long HEARTBEAT_MS = 10 * 60 * 1000L;
+  // Лежить без руху — дихаємо ще рідше: до раз на півгодини.
+  private static final long HEARTBEAT_MAX_MS = 30 * 60 * 1000L;
 
   private LocationManager locationManager;
   private HandlerThread handlerThread;
@@ -47,6 +56,8 @@ public final class TrackerService extends Service implements LocationListener {
   private double lastSentLat;
   private double lastSentLon;
   private long lastSentAt;
+  private long heartbeatMs = HEARTBEAT_MS;
+  private int consecutiveFailures;
 
   @Override
   public void onCreate() {
@@ -160,11 +171,18 @@ public final class TrackerService extends Service implements LocationListener {
     if (!haveFix) return;
 
     long now = System.currentTimeMillis();
-    boolean moved = !haveSent || metersFrom(lastSentLat, lastSentLon) >= SEND_MIN_METERS;
-    boolean due = !haveSent || now - lastSentAt >= SEND_MAX_GAP_MS;
-    // обидва «або» навмисно: і рух, і час. Стоячи — раз на дві хвилини
-    // (щоб було видно, що людина жива), ідучи — як тільки відійшли.
-    if (!moved && !due) return;
+    double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
+
+    // Лежить нерухомо — розтягуємо «подих» аж до півгодини. Це найбільша
+    // економія: телефон на столі пише 48 разів на добу замість 288.
+    if (haveSent && moved < STILL_METERS) {
+      heartbeatMs = Math.min(heartbeatMs * 2, HEARTBEAT_MAX_MS);
+    } else {
+      heartbeatMs = HEARTBEAT_MS;
+    }
+
+    boolean send = !haveSent || moved >= SEND_MIN_METERS || now - lastSentAt >= heartbeatMs;
+    if (!send) return;
 
     lastSentAt = now;
     lastSentLat = lastLat;
@@ -176,14 +194,22 @@ public final class TrackerService extends Service implements LocationListener {
           @Override
           public void onResult(String error) {
             if (error != null) {
+              consecutiveFailures++;
               Log.w(TAG, "надсилання не вдалося: " + error);
             } else {
+              if (consecutiveFailures > 0) Log.i(TAG, "мережа ожила");
+              consecutiveFailures = 0;
               Log.i(TAG, "точку надіслано");
             }
           }
         });
   }
 
+  /**
+   * Наступна спроба. Коли надсилання не вдалося — відходимо все далі
+   * (від 2 до 8 інтервалів), щоб не бити в стіну, коли мережа лежить.
+   * Вдалі — повертаємося до звичайного інтервалу.
+   */
   private void scheduleNextSend(final long delayMs) {
     if (handler == null) return;
     handler.removeCallbacksAndMessages(null);
@@ -192,10 +218,24 @@ public final class TrackerService extends Service implements LocationListener {
           @Override
           public void run() {
             sendNow();
-            scheduleNextSend(prefs.intervalSeconds() * 1000L);
+            long base = prefs.intervalSeconds() * 1000L;
+            if (consecutiveFailures > 0) {
+              long backoff = base * (1L << Math.min(consecutiveFailures, 3));
+              scheduleNextSend(backoff + jitter());
+            } else {
+              // Невеликий випадковий зсув: щоб тисяча телефонів, увімкнених
+              // о 9:00, не вдарили в базу в ту саму мить.
+              scheduleNextSend(base + jitter());
+            }
           }
         },
         delayMs);
+  }
+
+  /** Випадковий зсув до 20% інтервалу. */
+  private long jitter() {
+    long base = prefs.intervalSeconds() * 1000L;
+    return (long) (Math.random() * base * 0.2d);
   }
 
   private void startInForeground(String text) {

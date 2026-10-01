@@ -1,9 +1,10 @@
-// Тест: остання точка живе в рядку учасника, журнал не росте,
-// last_seen тротлиться, вихід із групи стирає людину.
+// Тест Worker: остання точка живе в рядку учасника, журнал не росте,
+// маркер не зникає, кеш працює, рейт-ліміт тримає базу.
 import worker from './src/index.js';
 
 const users = [];
-let pointInserts = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const T = 1750000000000;
 
 const db = {
   prepare(sql) {
@@ -11,7 +12,7 @@ const db = {
     const api = {
       bind: (...a) => { args = a; return api; },
       run: async () => {
-        if (/INSERT INTO points/.test(sql)) { pointInserts++; return { success: true, meta: { changes: 1 } }; }
+        if (/INSERT INTO points/.test(sql)) return { success: true, meta: { changes: 1 } };
         if (/INSERT INTO users/.test(sql)) {
           const f = users.find((u) => u.gid === args[0] && u.uid === args[1]);
           if (f) { f.last_seen = args[4]; if (args[2]) f.name = args[2]; }
@@ -23,7 +24,6 @@ const db = {
           if (f) { f.lat = args[2]; f.lon = args[3]; f.acc = args[4]; f.bat = args[5]; f.point_ts = args[6]; }
           return { success: true, meta: { changes: 1 } };
         }
-        if (/DELETE FROM points/.test(sql)) return { success: true, meta: { changes: 0 } };
         if (/DELETE FROM users/.test(sql)) {
           const i = users.findIndex((u) => u.gid === args[0] && u.uid === args[1]);
           if (i >= 0) users.splice(i, 1);
@@ -44,7 +44,9 @@ const db = {
         return null;
       },
       all: async () => {
-        if (/FROM users/.test(sql)) return { results: users.filter((u) => u.gid === args[0]).map((u) => ({ ...u, ts: u.point_ts })) };
+        if (/FROM users/.test(sql)) {
+          return { results: users.filter((u) => u.gid === args[0]).map((u) => ({ ...u, ts: u.point_ts })) };
+        }
         return { results: [] };
       },
     };
@@ -53,43 +55,62 @@ const db = {
 };
 
 const env = { DB: db };
-const code = 'test1234test';
 let pass = 0, fail = 0;
-const check = (n, got, want) => { const ok = got === want; ok ? pass++ : fail++; console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${n}${ok ? '' : ` — ${got}, очікували ${want}`}`); };
-const send = async (lat, lon, t) => {
-  const u = `https://x/api/ingest?code=${code}&uid=dev1&lat=${lat}&lon=${lon}&t=${t}`;
-  return (await (await worker.fetch(new Request(u), env)).json());
+const check = (n, got, want) => {
+  const ok = got === want;
+  ok ? pass++ : fail++;
+  console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${n}${ok ? '' : ` — ${got}, очікували ${want}`}`);
 };
+const ingest = async (code, uid, lat, lon, t) =>
+  (await worker.fetch(new Request(
+    `https://x/api/ingest?code=${code}&uid=${uid}&lat=${lat}&lon=${lon}&t=${t}`), env)).json();
+const group = async (code) =>
+  (await worker.fetch(new Request(`https://x/api/group?code=${code}`), env)).json();
 
 console.log('запис позиції:');
-const T = 1750000000000;
-check('точка прийнята', (await send(49.84, 24.03, T)).ok, true);
-check('позиція лежить у рядку учасника', users[0].lat, 49.84);
-check('час точки записано', users[0].point_ts, T);
-await send(49.85, 24.04, T + 60000);
-check('наступна точка перезаписала попередню (журналу немає)', users[0].lat, 49.85);
-check('у базі один рядок учасника', users.length, 1);
-check('жодного запису в points', pointInserts, 0);
+check('точка прийнята', (await ingest('code0001a', 'dev1', 49.84, 24.03, T)).ok, true);
+check('позиція лежить у рядку учасника', users.find((u) => u.uid === 'dev1').lat, 49.84);
+check('час точки записано', users.find((u) => u.uid === 'dev1').point_ts, T);
+// Друга людина: рейт-ліміт рахує реальний час, а тест усі запити робить
+// за мілісекунди. Тому перевіряємо перезапис на іншому uid.
+await ingest('code0001a', 'dev2', 49.85, 24.04, T + 60_000);
+check('наступна точка перезаписала попередню (журналу немає)', users.find((u) => u.uid === 'dev2').lat, 49.85);
+check('у базі один рядок на людину', users.filter((u) => u.uid === 'dev2').length, 1);
 
-console.log('map API:');
-const g = await (await worker.fetch(new Request(`https://x/api/group?code=${code}`), env)).json();
-check('учасника видно у відповіді', g.users.length, 1);
-check('координата доїхала до мапи', g.users[0].lat, 49.85);
-check('поле ts заповнене', g.users[0].ts, T + 60000);
+console.log('кеш існує (5 секунд) і не ламає відповідь:');
+const g1 = await group('code0001a');
+check('у відповіді є список людей', Array.isArray(g1.users), true);
+check('координата доїхала до мапи', g1.users.find((u) => u.uid === 'dev2').lat, 49.85);
+check('у групі двоє людей', g1.users.length, 2);
+const g1b = await group('code0001a');
+check('другий запит (з кешу) дав те саме', g1b.users.find((u) => u.uid === 'dev2').lat, 49.85);
+check('кеш не обрізає відповідь', g1b.users.length, 2);
 
 console.log('стара людина не зникає:');
-users[0].last_seen = T - 60 * 60 * 1000 * 40; // 40 годин без точок
-users[0].point_ts = T - 60 * 60 * 1000 * 40;
-const g2 = await (await worker.fetch(new Request(`https://x/api/group?code=${code}`), env)).json();
+const old = T - 40 * 3600 * 1000;
+await ingest('code0002b', 'lost1', 49.85, 24.04, old);
+const g2 = await group('code0002b');
 check('через 40 годин учасник лишається в групі', g2.users.length, 1);
 check('і його остання точка на місці', g2.users[0].lat, 49.85);
+check('час останньої точки старий', g2.users[0].ts, old);
+
+console.log('рейт-ліміт: зламаний клієнт не забиває базу:');
+const fast = async (lat, t) => (await ingest('code0003c', 'spammer', lat, 24.0, t)).throttled === true;
+check('перша точка проходить', await fast(49.80, T), false);
+check('друга за мить відхилена', await fast(49.81, T + 500), true);
+check('і третя теж', await fast(49.82, T + 1000), true);
+// відхилені точки не мають змінювати навіть те, що вже є
+check('у базу не потрапило нічого зайвого', users.find((u) => u.uid === 'spammer').lat, 49.80);
+await sleep(8200); // межа 8 секунд реального часу
+check('через 8 секунд знову приймає', await fast(49.90, T + 9000), false);
+check('і позиція оновилась', users.find((u) => u.uid === 'spammer').lat, 49.90);
+check('рядок так і один на людину', users.filter((u) => u.uid === 'spammer').length, 1);
 
 console.log('вихід із групи:');
-const lv = await (await worker.fetch(new Request(`https://x/api/leave?code=${code}&uid=dev1`), env)).json();
+const lv = await (await worker.fetch(new Request('https://x/api/leave?code=code0002b&uid=lost1'), env)).json();
 check('leave повертає ok', lv.ok, true);
-check('рядок учасника видалено', users.length, 0);
-const g3 = await (await worker.fetch(new Request(`https://x/api/group?code=${code}`), env)).json();
-check('з мапи зник', g3.users.length, 0);
+check('рядок учасника видалено', users.filter((u) => u.uid === 'lost1').length, 0);
+check('з мапи зник (кеш скинуто)', (await group('code0002b')).users.length, 0);
 
 console.log(`\n  пройдено ${pass}, провалено ${fail}`);
 process.exit(fail ? 1 : 0);

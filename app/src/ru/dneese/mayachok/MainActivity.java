@@ -45,7 +45,9 @@ public final class MainActivity extends Activity {
   private static final int REQ_LOCATION = 10;
   private static final int REQ_NOTIFICATIONS = 11;
   private static final int REQ_CHAT_ALERTS = 12;
-  private static final int[] INTERVALS = {10, 30, 60, 120};
+  // Інтервал опитування GPS. 10 секунд прибрано: з порогом 100 м воно
+  // лише тримало GPS-модуль увімкненим майже постійно, не додаючи точності.
+  private static final int[] INTERVALS = {30, 60, 120, 300};
 
   /** ChatService ставить цей прапорець: відкритися одразу на чаті. */
   public static final String EXTRA_OPEN_CHAT = "open_chat";
@@ -441,6 +443,13 @@ public final class MainActivity extends Activity {
     } else {
       stopChat();
     }
+
+    // Найважливіше для батареї. Сторінка мапи опитує API таймером раз на
+    // 15 секунд, і setInterval у JavaScript НЕ зупиняється, коли вкладка
+    // просто прихована. Без pauseTimers() ми вдень робимо ~26 тисяч запитів
+    // і тримаємо CPU та радіо ввімкненими дарма.
+    if (tab == TAB_MAP) mapView.resumeTimers();
+    else mapView.pauseTimers();
   }
 
   /**
@@ -793,12 +802,18 @@ public final class MainActivity extends Activity {
     super.onResume();
     render();
     if (currentTab == TAB_CHAT) startChat();
+    // відновлюємо таймери мапи лише якщо вона на екрані — інакше вони
+    // пішли б буркотіти у фоні
+    if (currentTab == TAB_MAP) mapView.resumeTimers();
   }
 
   @Override
   protected void onPause() {
     super.onPause();
     stopChat();
+    // Застосунок у фоні або екран вимкнено — таймери мапи зупиняються,
+    // інакше вона ганяла б запити в кишені всю ніч.
+    mapView.pauseTimers();
   }
 
   @Override
