@@ -116,11 +116,13 @@ find "$OUT/classes" -name '*.class' > "$OUT/classlist.txt"
 
 echo "==> 5/6 пакуємо APK"
 cp "$OUT/base.apk" "$OUT/app-unsigned.apk"
+# Після cd шлях має бути абсолютним, інакше zip не знайде архів.
+ABS_UNSIGNED="$PWD/$OUT/app-unsigned.apk"
 if command -v zip >/dev/null 2>&1; then
-  (cd "$OUT/dex" && zip -q -X "$OUT/app-unsigned.apk" classes.dex)
+  (cd "$OUT/dex" && zip -q -X "$ABS_UNSIGNED" classes.dex)
 else
   # Запасний шлях, коли немає zip: додаємо classes.dex через zipfile.
-  python3 - "$OUT/app-unsigned.apk" "$OUT/dex/classes.dex" <<'PY'
+  python3 - "$ABS_UNSIGNED" "$OUT/dex/classes.dex" <<'PY'
 import sys, zipfile, shutil, os
 apk, dex = sys.argv[1], sys.argv[2]
 tmp = apk + ".tmp"
