@@ -8,8 +8,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT="build"
-VERSION_CODE=1
-VERSION_NAME="1.0"
+VERSION_CODE=2
+VERSION_NAME="1.2"
+# Назва файлу в Releases лишається сталою: на неї посилаються застосунок,
+# веб-сторінка, README й текст запрошення. Перейменування зламало б усі старі
+# посилання, тож версію тримаємо в AndroidManifest.xml, а не в імені файлу.
+APK_NAME="mayachok-1.0.apk"
 
 # --- знаходимо інструменти: спершу локальний SDK, потім системні ---
 find_android_jar() {
@@ -137,22 +141,20 @@ PY
 fi
 
 echo "==> 6/6 підпис"
-KS="$OUT/debug.keystore"
+# Ключ лежить поза build/, бо build/ чиститься щоразу. Тимчасовий ключ з
+# кожної збірки ламає оновлення: Android відхиляє APK з іншим підписом.
+KS="keys/mayachok.keystore"
 if [ ! -f "$KS" ]; then
-  keytool -genkeypair -v \
-    -keystore "$KS" \
-    -storepass android -keypass android \
-    -alias gps -keyalg RSA -keysize 2048 -validity 10000 \
-    -dname "CN=gps-tracker, OU=dev, O=dneese, C=UA" >/dev/null 2>&1
-  echo "    створено тимчасове сховище ключа: $KS"
+  echo "ПОМИЛКА: немає $KS — створіть його один раз і збережіть у закритому сховищі."
+  exit 1
 fi
+KS_PASS="${MAYACHOK_KS_PASS:?задайте MAYACHOK_KS_PASS у середовищі або secrets.sh}"
 
-APK_NAME="mayachok-${VERSION_NAME}.apk"
 "$APKSIGNER" sign \
   --ks "$KS" \
-  --ks-pass pass:android \
-  --key-pass pass:android \
-  --ks-key-alias gps \
+  --ks-pass "pass:$KS_PASS" \
+  --key-pass "pass:$KS_PASS" \
+  --ks-key-alias mayachok \
   --min-sdk-version 21 \
   --out "$OUT/$APK_NAME" \
   "$OUT/tmp/app-unsigned.apk"

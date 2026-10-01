@@ -34,6 +34,22 @@ jobs:
           echo "build-tools: $BT"
           echo "platform:    $PLATFORM"
 
+      - name: Відновити ключ підпису
+        env:
+          KEYSTORE_B64: ${{ secrets.MAYACHOK_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.MAYACHOK_KS_PASS }}
+        run: |
+          # Ключ не в git: Android відхиляє оновлення, підписане іншим
+          # ключем, тож стабільний ключ тримаємо в секретах репозиторію.
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KS_PASS" ]; then
+            echo "::error::не задано MAYACHOK_KEYSTORE_B64 / MAYACHOK_KS_PASS"
+            exit 1
+          fi
+          mkdir -p app/keys
+          printf '%s' "$KEYSTORE_B64" | base64 -d > app/keys/mayachok.keystore
+          printf '%s' "$KS_PASS" > app/keys/pass.txt
+          echo "    ключ відновлено"
+
       - name: Зібрати APK
         run: |
           cd app
@@ -42,6 +58,12 @@ jobs:
           export APKSIGNER="${{ steps.sdk.outputs.build_tools }}apksigner"
           export ANDROID_JAR="${{ steps.sdk.outputs.platform }}android.jar"
           bash build.sh
+
+      - name: Показати сертифікат підпису
+        run: |
+          # незмінний сертифікат = оновлення ставляться поверх старих
+          "${{ steps.sdk.outputs.build_tools }}apksigner" verify \
+            --print-certs app/build/mayachok-*.apk | grep -E 'SHA-256 digest' | head -1
 
       - name: Завантажити артефакт
         uses: actions/upload-artifact@v4

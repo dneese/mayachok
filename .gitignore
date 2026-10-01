@@ -11,6 +11,7 @@ app/src/ru/dneese/mayachok/BuildConfig.java
 *.jks
 secrets.local.sh
 .env
+app/keys/
 
 # Pages
 _site/

@@ -6,6 +6,10 @@
 # Використання:  source scripts/secrets.sh
 #
 # Файл НІКОЛИ не потрапляє в git — він поза репозиторієм.
+#
+# Ключ підпису APK: пароль з файлу app/keys/pass.txt, якщо він є.
+# app/keys/ теж поза git (.gitignore) — без цього ключа оновлення
+# застосунку неможливі.
 
 TOKENS_BACKUP="${TOKENS_BACKUP:-/storage/emulated/0/Documents/tokens-backup.txt}"
 
@@ -25,3 +29,13 @@ fi
 
 export CF_API_TOKEN CF_ACCOUNT_ID
 echo "secrets.sh: CF_API_TOKEN і CF_ACCOUNT_ID завантажено (значення приховані)"
+
+# --- ключ підпису APK ---
+KEYS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/app/keys"
+if [ -f "$KEYS_DIR/pass.txt" ]; then
+  MAYACHOK_KS_PASS="$(tr -d '\r\n' < "$KEYS_DIR/pass.txt")"
+  export MAYACHOK_KS_PASS
+  echo "secrets.sh: MAYACHOK_KS_PASS завантажено"
+else
+  echo "secrets.sh: немає $KEYS_DIR/pass.txt — збірка APK не підпишеться" >&2
+fi
