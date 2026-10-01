@@ -37,6 +37,7 @@ jobs:
         run: |
           cd app
           export AAPT2="${{ steps.sdk.outputs.build_tools }}aapt2"
+          export D8="${{ steps.sdk.outputs.build_tools }}d8"
           export APKSIGNER="${{ steps.sdk.outputs.build_tools }}apksigner"
           export ANDROID_JAR="${{ steps.sdk.outputs.platform }}android.jar"
           bash build.sh
