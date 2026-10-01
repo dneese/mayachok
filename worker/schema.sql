@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   gid        TEXT NOT NULL,
   uid        TEXT NOT NULL,
   name       TEXT,
+  role       TEXT NOT NULL DEFAULT 'tracker', -- 'tracker' надсилає GPS, 'chat' — лише пише
   last_seen  INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (gid, uid)
@@ -31,3 +32,15 @@ CREATE TABLE IF NOT EXISTS groups (
   gid        TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL
 );
+
+-- Чат групи. Лише текст, без файлів. Тиждень історії (видаляється у cleanup).
+CREATE TABLE IF NOT EXISTS messages (
+  id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  gid   TEXT NOT NULL,
+  uid   TEXT NOT NULL,
+  name  TEXT,
+  body  TEXT NOT NULL,
+  ts    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_gid_id ON messages(gid, id);
+CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);

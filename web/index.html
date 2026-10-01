@@ -42,6 +42,7 @@
         <button id="btn-app">Відкрити застосунок</button>
         <button id="btn-share">Поділитися</button>
       </div>
+      <button id="btn-chat" class="btn chat-open">Відкрити чат групи</button>
       <p class="hint">Надішліть це посилання. Той, хто його відкриє, потрапить у групу
         автоматично — вводити нічого не треба.</p>
       <details class="code-detail">
@@ -53,11 +54,27 @@
     </section>
 
     <section class="people-block">
-      <div class="people-head">
-        <span class="label">Люди</span>
-        <span class="label muted">натисніть, щоб побачити слід</span>
+      <div class="tabs">
+        <button class="tab active" data-tab="people">Люди</button>
+        <button class="tab" data-tab="chat">Чат<span id="chat-badge" class="badge hidden">0</span></button>
       </div>
-      <div id="people"></div>
+
+      <div id="tab-people">
+        <div class="people-head">
+          <span class="label">Люди</span>
+          <span class="label muted">натисніть, щоб побачити слід</span>
+        </div>
+        <div id="people"></div>
+      </div>
+
+      <div id="tab-chat" class="hidden">
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form">
+          <input id="chat-input" type="text" maxlength="500" placeholder="Повідомлення…" autocomplete="off">
+          <button type="submit" class="primary">OK</button>
+        </form>
+        <p class="hint">Повідомлення бачать усі в групі. Старі зникають через тиждень.</p>
+      </div>
     </section>
   </div>
 </div>
@@ -83,8 +100,23 @@
       <button id="btn-share-native" class="primary">Поділитися…</button>
       <button data-close="modal-share">Закрити</button>
     </div>
-    <p class="hint">Код живе у частині адреси після <b>#</b>. Тому сервер його не бачить
-      і він не потрапляє в журнали. Сервер бачить лише короткий хеш.</p>
+    <p class="hint">Код живе у частині адреси після <b>#</b>. Сайт GitHub його не отримує,
+      а на сервері зберігається лише короткий хеш. Повний код потрібен, щоб знайти групу,
+      тому не пересилайте посилання стороннім.</p>
+  </div>
+</div>
+
+<!-- модалка: вхід у чат -->
+<div id="modal-name" class="modal">
+  <div class="modal-box">
+    <button class="modal-close" data-close="modal-name" aria-label="Закрити">✕</button>
+    <h2>Ваше ім’я в чаті</h2>
+    <p class="modal-lead">Повідомлення підписуються іменем. Воно збережеться в цьому
+      браузері — наступного разу питати не доведеться.</p>
+    <input id="chat-name" type="text" maxlength="24" placeholder="Наприклад Олена" autocomplete="off">
+    <div class="modal-actions">
+      <button id="chat-name-ok" class="primary">Почати писати</button>
+    </div>
   </div>
 </div>
 
@@ -144,7 +176,7 @@
       <a class="btn primary" href="https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk" target="_blank" rel="noopener">Завантажити APK (Android)</a>
     </details>
 
-    <p class="gate-note">Код залишається в адресному рядку після <b>#</b> — сервер його не бачить.</p>
+    <p class="gate-note">Код залишається в адресному рядку після <b>#</b> — сайт GitHub його не отримує.</p>
   </div>
 </div>
 

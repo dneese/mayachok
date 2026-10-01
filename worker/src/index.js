@@ -6,6 +6,9 @@ const STALE_MINUTES = 30; // після цього маркер ховаєтьс
 const POINT_RETENTION_HOURS = 48; // стільки тримаємо в базі
 const USER_RETENTION_DAYS = 30; // неактивні користувачі видаляються
 const MAX_NAME_LEN = 24;
+const MAX_BODY_LEN = 500; // довжина одного повідомлення
+const CHAT_RETENTION_DAYS = 7; // стільки тримаємо переписку
+const MAX_CHAT_PAGE = 100;
 const MAX_TRACK_POINTS = 500; // спрощення сліду на сервері
 
 // Алфавіт без i, l, o, u — щоб не плутати при диктуванні телефоном.
@@ -89,17 +92,20 @@ async function handleJoin(request, db) {
   const name = sanitizeName(params.get('name'));
   if (!name) return bad('name required');
 
-  const member = await upsertUser(db, gid, uid, name);
+  // 'chat' — учасник, який лише пише з браузера і не передає координати.
+  const role = params.get('role') === 'chat' ? 'chat' : 'tracker';
+
+  const member = await upsertUser(db, gid, uid, name, role);
   const user = await db
-    .prepare('SELECT name, last_seen FROM users WHERE gid = ?1 AND uid = ?2')
+    .prepare('SELECT name, role FROM users WHERE gid = ?1 AND uid = ?2')
     .bind(gid, member)
     .first();
   if (!user) return json({ error: 'not found' }, 404);
 
-  return json({ ok: true, uid: member, name: user.name, gid });
+  return json({ ok: true, uid: member, name: user.name, role: user.role, gid });
 }
 
-async function upsertUser(db, gid, uid, name) {
+async function upsertUser(db, gid, uid, name, role) {
   const now = Date.now();
   if (uid) {
     // Ключ — пара (gid, uid): телефон може бути в кількох групах одночасно.
@@ -107,13 +113,13 @@ async function upsertUser(db, gid, uid, name) {
     // при надсиланні точок без нього.
     const res = await db
       .prepare(
-        `INSERT INTO users (gid, uid, name, last_seen, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)
+        `INSERT INTO users (gid, uid, name, role, last_seen, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
          ON CONFLICT(gid, uid) DO UPDATE SET
-           last_seen = ?4,
+           last_seen = ?5,
            name = COALESCE(?3, users.name)`,
       )
-      .bind(gid, uid, sanitizeName(name) || null, now)
+      .bind(gid, uid, sanitizeName(name) || null, role || 'tracker', now)
       .run();
     if (res.success) return uid;
   }
@@ -125,6 +131,67 @@ async function upsertUser(db, gid, uid, name) {
 function sanitizeName(name) {
   if (typeof name !== 'string') return '';
   return name.replace(/[\p{C}]/gu, '').trim().slice(0, MAX_NAME_LEN);
+}
+
+/** Текст повідомлення: прибираємо керуючі символи, зберігаємо переноси рядків. */
+function sanitizeBody(body) {
+  if (typeof body !== 'string') return '';
+  return body
+    .replace(/[\p{Cc}\p{Cf}]/gu, (c) => (c === '\n' ? '\n' : ''))
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, MAX_BODY_LEN);
+}
+
+async function handleSay(request, db) {
+  const params = await readParams(request);
+  const gid = await groupIdFor(params.get('code'));
+  if (!gid) return bad('invalid code');
+
+  const uid = params.get('uid');
+  if (!uid) return bad('uid required');
+
+  const body = sanitizeBody(params.get('body'));
+  if (!body) return bad('empty message');
+
+  const name = sanitizeName(params.get('name')) || 'Хтось';
+  const now = Date.now();
+
+  // Людина має бути в групі: чат не приймає повідомлення від сторонніх.
+  const member = await db
+    .prepare('SELECT uid FROM users WHERE gid = ?1 AND uid = ?2')
+    .bind(gid, uid)
+    .first();
+  if (!member) return bad('join the group first');
+
+  const res = await db
+    .prepare('INSERT INTO messages (gid, uid, name, body, ts) VALUES (?1, ?2, ?3, ?4, ?5)')
+    .bind(gid, uid, name, body, now)
+    .run();
+
+  return json({ ok: true, id: res.meta ? res.meta.last_row_id : null, name, ts: now });
+}
+
+async function handleChat(request, db) {
+  const params = await readParams(request);
+  const gid = await groupIdFor(params.get('code'));
+  if (!gid) return bad('invalid code');
+
+  // after — останній прочитаний id: віддаємо лише нові повідомлення.
+  const after = Number(params.get('after')) || 0;
+  const limit = Math.min(Math.max(Number(params.get('limit')) || MAX_CHAT_PAGE, 1), MAX_CHAT_PAGE);
+
+  const { results } = await db
+    .prepare(
+      `SELECT id, uid, name, body, ts FROM messages
+       WHERE gid = ?1 AND id > ?2
+       ORDER BY id ASC
+       LIMIT ?3`,
+    )
+    .bind(gid, after, limit)
+    .all();
+
+  return json({ ok: true, now: Date.now(), messages: results });
 }
 
 async function handleCreate(db) {
@@ -175,7 +242,7 @@ async function handleGroup(request, db) {
   const staleCutoff = Date.now() - STALE_MINUTES * 60 * 1000;
   const { results } = await db
     .prepare(
-      `SELECT u.uid, u.name, u.last_seen,
+      `SELECT u.uid, u.name, u.role, u.last_seen,
               (SELECT p.lat   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lat,
               (SELECT p.lon   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS lon,
               (SELECT p.acc   FROM points p WHERE p.gid = u.gid AND p.uid = u.uid ORDER BY p.ts DESC LIMIT 1) AS acc,
@@ -263,13 +330,16 @@ async function handleHealth(db) {
 async function cleanup(db) {
   const pointsCutoff = Date.now() - POINT_RETENTION_HOURS * 60 * 60 * 1000;
   const usersCutoff = Date.now() - USER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const chatCutoff = Date.now() - CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const a = await db.prepare('DELETE FROM points WHERE ts < ?1').bind(pointsCutoff).run();
   const b = await db.prepare('DELETE FROM users WHERE last_seen < ?1').bind(usersCutoff).run();
   const c = await db.prepare('DELETE FROM groups WHERE created_at < ?1').bind(usersCutoff).run();
+  const d = await db.prepare('DELETE FROM messages WHERE ts < ?1').bind(chatCutoff).run();
   return {
     deletedPoints: (a.meta && a.meta.changes) || 0,
     deletedUsers: (b.meta && b.meta.changes) || 0,
     deletedGroups: (c.meta && c.meta.changes) || 0,
+    deletedMessages: (d.meta && d.meta.changes) || 0,
   };
 }
 
@@ -301,6 +371,8 @@ export default {
       if (path === '/api/group') return await handleGroup(request, db);
       if (path === '/api/track') return await handleTrack(request, db);
       if (path === '/api/rename') return await handleRename(request, db);
+      if (path === '/api/say') return await handleSay(request, db);
+      if (path === '/api/chat') return await handleChat(request, db);
       if (path === '/api/health') return await handleHealth(db);
 
       // Сумісність зі старим gps.php: ?lat=&lon=&t=
@@ -310,7 +382,17 @@ export default {
       return json(
         {
           ok: false,
-          endpoints: ['/api/create', '/api/ingest', '/api/group', '/api/track', '/api/rename', '/api/health'],
+          endpoints: [
+            '/api/create',
+            '/api/join',
+            '/api/ingest',
+            '/api/group',
+            '/api/track',
+            '/api/rename',
+            '/api/say',
+            '/api/chat',
+            '/api/health',
+          ],
         },
         404,
       );

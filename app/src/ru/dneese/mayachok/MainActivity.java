@@ -4,13 +4,22 @@ import android.Manifest;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.app.Activity;
+import android.view.Gravity;
 import android.view.View;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -44,6 +53,20 @@ public final class MainActivity extends Activity {
   private Spinner intervalSpinner;
   private Button toggle;
 
+  // вбудовані екрани: карта й чат
+  private View mainPanel;
+  private View mapPanel;
+  private View chatPanel;
+  private WebView mapView;
+  private ScrollView chatLog;
+  private LinearLayout chatList;
+  private TextView chatEmpty;
+  private EditText chatInput;
+
+  private final Handler ticker = new Handler(Looper.getMainLooper());
+  private long lastMessageId;
+  private boolean chatOpen;
+
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
@@ -64,6 +87,21 @@ public final class MainActivity extends Activity {
 
     intervalSpinner = findViewById(R.id.interval);
     toggle = findViewById(R.id.toggle);
+
+    mainPanel = findViewById(R.id.main_panel);
+    mapPanel = findViewById(R.id.map_panel);
+    chatPanel = findViewById(R.id.chat_panel);
+    mapView = findViewById(R.id.map_view);
+    chatLog = findViewById(R.id.chat_log);
+    chatList = findViewById(R.id.chat_list);
+    chatEmpty = findViewById(R.id.chat_empty);
+    chatInput = findViewById(R.id.chat_input);
+
+    // карта — звичайний WebView, тож нових залежностей не потрібно
+    WebSettings webSettings = mapView.getSettings();
+    webSettings.setJavaScriptEnabled(true);
+    webSettings.setDomStorageEnabled(true);
+    mapView.setWebViewClient(new WebViewClient());
 
     nameInput.setText(prefs.name());
     codeInput.setText(prefs.code());
@@ -114,13 +152,42 @@ public final class MainActivity extends Activity {
     findViewById(R.id.map).setOnClickListener(new View.OnClickListener() {
       @Override
       public void onClick(View view) {
-        openUrl(prefs.mapUrl());
+        openMap();
+      }
+    });
+
+    findViewById(R.id.chat).setOnClickListener(new View.OnClickListener() {
+      @Override
+      public void onClick(View view) {
+        openChat();
+      }
+    });
+
+    findViewById(R.id.map_back).setOnClickListener(new View.OnClickListener() {
+      @Override
+      public void onClick(View view) {
+        closeOverlay();
+      }
+    });
+
+    findViewById(R.id.chat_back).setOnClickListener(new View.OnClickListener() {
+      @Override
+      public void onClick(View view) {
+        closeOverlay();
+      }
+    });
+
+    findViewById(R.id.chat_send).setOnClickListener(new View.OnClickListener() {
+      @Override
+      public void onClick(View view) {
+        sendChat();
       }
     });
 
     findViewById(R.id.forget).setOnClickListener(new View.OnClickListener() {
       @Override
       public void onClick(View view) {
+        closeOverlay();
         prefs.setCode("");
         codeInput.setText("");
         stopTracking();
@@ -178,6 +245,17 @@ public final class MainActivity extends Activity {
   protected void onResume() {
     super.onResume();
     render();
+    if (chatOpen) {
+      pullChat();
+      ticker.postDelayed(chatTick, 4000);
+    }
+  }
+
+  @Override
+  protected void onPause() {
+    super.onPause();
+    // чат не має робити запити у фоні — інакше вони з’їдають батарею
+    ticker.removeCallbacks(chatTick);
   }
 
   private void saveBasics() {
@@ -307,6 +385,153 @@ public final class MainActivity extends Activity {
     } catch (Exception error) {
       toast("Не вдалося скопіювати");
     }
+  }
+
+  /**
+   * Екрани карти й чату — це окремі View, які перекривають головний.
+   * Один Activity тримає всі три, тож перемикання миттєве й без перезавантаження.
+   */
+  private void showOverlay(View panel) {
+    mainPanel.setVisibility(View.GONE);
+    mapPanel.setVisibility(panel == mapPanel ? View.VISIBLE : View.GONE);
+    chatPanel.setVisibility(panel == chatPanel ? View.VISIBLE : View.GONE);
+    chatOpen = panel == chatPanel;
+    if (chatOpen) {
+      // чат відкривається з поточним станом — вантажимо останні повідомлення
+      lastMessageId = 0;
+      chatList.removeAllViews();
+      chatEmpty.setVisibility(View.VISIBLE);
+      pullChat();
+      chatInput.requestFocus();
+      // опитування має йти одразу, а не чекати наступного onResume
+      ticker.removeCallbacks(chatTick);
+      ticker.postDelayed(chatTick, 4000);
+    } else {
+      ticker.removeCallbacks(chatTick);
+    }
+  }
+
+  private void closeOverlay() {
+    showOverlay(null);
+  }
+
+  private void openMap() {
+    if (!prefs.configured()) {
+      toast("Спершу створіть групу");
+      return;
+    }
+    showOverlay(mapPanel);
+    // та сама сторінка, що й у браузері: код у фрагменті, тож вхід
+    // відбувається автоматично і жодного зовнішнього браузера не потрібно
+    mapView.loadUrl(prefs.mapUrl());
+  }
+
+  private void openChat() {
+    if (!prefs.configured()) {
+      toast("Спершу створіть групу");
+      return;
+    }
+    showOverlay(chatPanel);
+  }
+
+  private final Runnable chatTick =
+      new Runnable() {
+        @Override
+        public void run() {
+          pullChat();
+          ticker.postDelayed(this, 4000);
+        }
+      };
+
+  /** Читає нові повідомлення і додає їх у стрічку. */
+  private void pullChat() {
+    if (!chatOpen || !prefs.configured()) return;
+    final long after = lastMessageId;
+    api.chat(
+        prefs.code(),
+        after,
+        new Api.ChatCallback() {
+          @Override
+          public void onResult(final java.util.List<Api.Message> messages, String error) {
+            runOnUiThread(
+                new Runnable() {
+                  @Override
+                  public void run() {
+                    if (messages == null || messages.isEmpty()) return;
+                    for (Api.Message message : messages) {
+                      // сервер повертає всі записи новиіші за after, але
+                      // захистимося від дублів, якщо polling налетів двічі
+                      if (message.id <= lastMessageId) continue;
+                      lastMessageId = message.id;
+                      addMessageRow(message);
+                    }
+                    if (chatList.getChildCount() > 0) {
+                      chatEmpty.setVisibility(View.GONE);
+                      chatLog.post(
+                          new Runnable() {
+                            @Override
+                            public void run() {
+                              chatLog.fullScroll(ScrollView.FOCUS_DOWN);
+                            }
+                          });
+                    }
+                  }
+                });
+          }
+        });
+  }
+
+  /** Одне повідомлення: хто і коли написав, сам текст. */
+  private void addMessageRow(Api.Message message) {
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.VERTICAL);
+    row.setPadding(0, 6, 0, 14);
+
+    TextView meta = new TextView(this);
+    String time = new java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        .format(new java.util.Date(message.ts));
+    meta.setText((message.name == null || message.name.isEmpty() ? "Хтось" : message.name)
+        + "  " + time);
+    meta.setTextSize(12);
+    meta.setTextColor(Color.parseColor("#8a8f98"));
+    row.addView(meta);
+
+    TextView body = new TextView(this);
+    body.setText(message.body);
+    body.setTextSize(16);
+    body.setTextColor(Color.parseColor("#1a1d21"));
+    row.addView(body);
+
+    chatList.addView(row);
+  }
+
+  private void sendChat() {
+    if (!chatOpen || !prefs.configured()) return;
+    final String text = chatInput.getText().toString().trim();
+    if (text.isEmpty()) return;
+    chatInput.setText("");
+
+    api.say(
+        prefs.code(),
+        text,
+        new Api.SayCallback() {
+          @Override
+          public void onResult(String error) {
+            runOnUiThread(
+                new Runnable() {
+                  @Override
+                  public void run() {
+                    if (error == null) {
+                      pullChat();
+                    } else {
+                      // не даємо загубити написане
+                      chatInput.setText(text);
+                      toast(error);
+                    }
+                  }
+                });
+          }
+        });
   }
 
   private void openUrl(String url) {

@@ -12,13 +12,15 @@ CREATE TABLE users_new (
   gid        TEXT NOT NULL,
   uid        TEXT NOT NULL,
   name       TEXT,
+  role       TEXT NOT NULL DEFAULT 'tracker',
   last_seen  INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (gid, uid)
 );
 
-INSERT OR IGNORE INTO users_new (gid, uid, name, last_seen, created_at)
-  SELECT gid, uid, name, last_seen, created_at FROM users;
+-- стари рядки не мають role — ті, хто надсилав точки, це трекери
+INSERT OR IGNORE INTO users_new (gid, uid, name, role, last_seen, created_at)
+  SELECT gid, uid, name, 'tracker', last_seen, created_at FROM users;
 
 DROP TABLE users;
 ALTER TABLE users_new RENAME TO users;

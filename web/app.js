@@ -4,6 +4,7 @@ const API = 'https://mayachok.kikikiska.workers.dev';
 const APK_URL = 'https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk';
 
 const POLL_MS = 10000;
+const CHAT_POLL_MS = 3000;
 const FRESH_MS = 2 * 60 * 1000;
 const HOURS_OPTIONS = [1, 3, 12];
 
@@ -14,6 +15,11 @@ const state = {
   trails: new Map(),
   selected: null,
   hours: 12,
+  // чат
+  lastMessageId: 0,
+  chatName: '',
+  tab: 'people',
+  unread: 0,
 };
 
 let map = null;
@@ -36,6 +42,10 @@ function cleanCode(raw) {
 function codeFromInput(raw) {
   let text = String(raw || '').trim();
   if (!text) return null;
+  // mayachok://join/КОД — беремо останній сегмент шляху, щоб у код
+  // не просочилися слова «mayachok» та «join»
+  const slash = text.lastIndexOf('/');
+  if (slash >= 0 && slash < text.length - 1) text = text.slice(slash + 1);
   // код живе у фрагменті після '#'
   const hash = text.lastIndexOf('#');
   if (hash >= 0 && hash < text.length - 1) text = text.slice(hash + 1);
@@ -299,6 +309,139 @@ function renderPeople(now) {
   }
 }
 
+// --- чат ---
+
+const chatNameKey = 'mayachok-name';
+
+function localUid() {
+  let uid = localStorage.getItem('mayachok-uid');
+  if (!uid) {
+    uid = 'web-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    localStorage.setItem('mayachok-uid', uid);
+  }
+  return uid;
+}
+
+function clockTime(ts) {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** Реєструє браузер як учасника групи, щоб сервер дозволив писати в чат. */
+async function ensureChatMember() {
+  try {
+    await fetch(`${API}/api/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: state.code, uid: localUid(), name: state.chatName, role: 'chat' }),
+    });
+  } catch {
+    // не критично: напишемо й так, сервер перевірить і скаже
+  }
+}
+
+async function pollChat() {
+  if (!state.code) return;
+  try {
+    const res = await fetch(
+      `${API}/api/chat?code=${encodeURIComponent(state.code)}&after=${state.lastMessageId}`,
+      { cache: 'no-store' },
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.messages || data.messages.length === 0) return;
+
+    for (const m of data.messages) {
+      addMessage(m);
+      state.lastMessageId = Math.max(state.lastMessageId, m.id);
+    }
+    if (state.tab !== 'chat') state.unread += data.messages.length;
+    updateChatBadge();
+    scrollChatToEnd();
+  } catch {
+    // чат не критичний — тихо пропускаємо опитування
+  }
+}
+
+function addMessage(m) {
+  const log = $('chat-log');
+  const mine = m.uid === localUid();
+  const row = document.createElement('div');
+  row.className = 'msg' + (mine ? ' mine' : '');
+  row.innerHTML = `
+    <div class="msg-head">
+      <span class="msg-name">${escapeHtml(m.name || 'Хтось')}</span>
+      <span class="msg-time">${clockTime(m.ts)}</span>
+    </div>
+    <div class="msg-body">${escapeHtml(m.body).replace(/\n/g, '<br>')}</div>`;
+  log.appendChild(row);
+}
+
+function scrollChatToEnd() {
+  const log = $('chat-log');
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateChatBadge() {
+  const badge = $('chat-badge');
+  if (state.unread > 0 && state.tab !== 'chat') {
+    badge.textContent = state.unread > 99 ? '99+' : String(state.unread);
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+    state.unread = 0;
+  }
+}
+
+function switchTab(name) {
+  state.tab = name;
+  $('tab-people').classList.toggle('hidden', name !== 'people');
+  $('tab-chat').classList.toggle('hidden', name !== 'chat');
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.tab === name);
+  });
+  if (name === 'chat') {
+    updateChatBadge();
+    scrollChatToEnd();
+  } else {
+    render();
+  }
+  if (map) setTimeout(() => map.invalidateSize(), 50);
+}
+
+async function sendChat(text) {
+  const body = text.trim();
+  if (!body) return;
+  $('chat-input').value = '';
+  await ensureChatMember();
+  try {
+    await fetch(`${API}/api/say`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: state.code,
+        uid: localUid(),
+        name: state.chatName,
+        body,
+      }),
+    });
+  } catch {
+    $('chat-input').value = body; // повертаємо текст, щоб не загубити
+    flash('не вдалося надіслати');
+  }
+  pollChat();
+}
+
+function openChat() {
+  switchTab('chat');
+  if (state.chatName) {
+    $('chat-input').focus();
+  } else {
+    $('chat-name').value = localStorage.getItem(chatNameKey) || '';
+    openModal('modal-name');
+  }
+}
+
 // --- слід ---
 
 async function selectUser(uid) {
@@ -371,6 +514,31 @@ function fitAll() {
   else map.setView([49.84, 24.03], 12);
 }
 
+$('btn-chat').onclick = openChat;
+
+$('chat-name-ok').onclick = () => {
+  const name = $('chat-name').value.trim();
+  if (!name) return;
+  state.chatName = name;
+  localStorage.setItem(chatNameKey, name);
+  closeModal('modal-name');
+  ensureChatMember();
+  $('chat-input').focus();
+};
+
+$('chat-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!state.chatName) {
+    openChat();
+    return;
+  }
+  sendChat($('chat-input').value);
+});
+
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+});
+
 // --- інтерфейс ---
 
 function setStatus(kind, text) {
@@ -422,6 +590,10 @@ function start() {
   initMap();
   poll();
   setInterval(poll, POLL_MS);
+
+  // чат питаємо частіше — повідомлення мають з'являтися одразу
+  pollChat();
+  setInterval(pollChat, CHAT_POLL_MS);
 }
 
 // --- події ---

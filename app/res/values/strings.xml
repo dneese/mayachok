@@ -21,7 +21,12 @@
     <string name="hint_code_share">Скопіюйте посилання й надішліть. Той, хто його відкриє, потрапить у групу автоматично.</string>
     <string name="btn_share">Поділитися посиланням</string>
     <string name="btn_copy_link">Скопіювати посилання</string>
-    <string name="btn_map">Відкрити мапу</string>
+    <string name="btn_map">Мапа</string>
+    <string name="btn_chat">Чат</string>
+    <string name="btn_back">‹ Назад</string>
+    <string name="chat_empty">Повідомлень ще немає. Напишіть перше — решта групи побачить його одразу.</string>
+    <string name="chat_hint">Повідомлення…</string>
+    <string name="chat_send">OK</string>
     <string name="btn_forget">Вийти з групи</string>
 
     <!-- 3. трекер -->

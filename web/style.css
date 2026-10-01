@@ -202,6 +202,113 @@ body.sheet-collapsed #map { bottom: 46px; }
 
 /* люди */
 
+/* вкладки */
+
+.tabs { display: flex; gap: 6px; margin: 20px 0 8px; }
+
+.tab {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.badge {
+  display: inline-block;
+  min-width: 17px;
+  padding: 0 5px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 11px;
+  line-height: 17px;
+  text-align: center;
+}
+.tab.active .badge { background: #fff; color: var(--accent); }
+
+.btn.chat-open { display: block; margin-top: 10px; }
+
+/* чат */
+
+.chat-log {
+  height: 40vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 2px;
+}
+
+.chat-log:empty::after {
+  content: 'Повідомлень ще немає. Напишіть перше.';
+  display: block;
+  padding: 14px 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.msg { margin-bottom: 12px; }
+.msg.mine { text-align: right; }
+
+.msg-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.msg-time { font-size: 11px; color: #9aa1ac; margin-left: 6px; }
+
+.msg-body {
+  display: inline-block;
+  max-width: 82%;
+  margin-top: 3px;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: #f1f3f6;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.msg.mine .msg-body { background: var(--accent); color: #fff; }
+
+.chat-form { display: flex; gap: 7px; margin-top: 10px; }
+
+.chat-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 15px;
+}
+.chat-form input:focus { outline: none; border-color: var(--accent); }
+
+.chat-form button {
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.chat-form .primary { background: var(--accent); color: #fff; }
+
+#chat-name {
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 17px;
+}
+#chat-name:focus { outline: none; border-color: var(--accent); }
+
 .people-head { display: flex; justify-content: space-between; align-items: baseline; margin: 20px 0 8px; }
 
 .person {

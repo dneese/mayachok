@@ -30,6 +30,172 @@ public final class Api {
     void onResult(String error);
   }
 
+  /** Одне повідомлення чату. */
+  public static final class Message {
+    public final long id;
+    public final String name;
+    public final String body;
+    public final long ts;
+
+    Message(long id, String name, String body, long ts) {
+      this.id = id;
+      this.name = name;
+      this.body = body;
+      this.ts = ts;
+    }
+  }
+
+  /** Усі нові повідомлення після afterId (0 — усі). */
+  public interface ChatCallback {
+    void onResult(java.util.List<Message> messages, String error);
+  }
+
+  public interface SayCallback {
+    void onResult(String error);
+  }
+
+  /**
+   * Читає чат групи. Запит без фільтра повертає лише те, що новіше за afterId,
+   * тож миттєвий стан «прочитано все» вкладається у одне число.
+   */
+  public void chat(final String code, final long afterId, final ChatCallback callback) {
+    pool.execute(
+        new Runnable() {
+          @Override
+          public void run() {
+            HttpURLConnection connection = null;
+            try {
+              String url =
+                  new Prefs(context).api()
+                      + "/api/chat?code="
+                      + URLEncoder.encode(code, "UTF-8")
+                      + "&after="
+                      + afterId;
+              connection = open(url);
+              if (connection.getResponseCode() != 200) {
+                callback.onResult(null, "чат недоступний");
+                return;
+              }
+                callback.onResult(parseChat(read(connection.getInputStream())), null);
+            } catch (Exception error) {
+              callback.onResult(null, "немає зв’язку");
+            } finally {
+              if (connection != null) connection.disconnect();
+            }
+          }
+        });
+  }
+
+  /** Надсилає одне повідомлення від імені цього телефону. */
+  public void say(final String code, final String body, final SayCallback callback) {
+    pool.execute(
+        new Runnable() {
+          @Override
+          public void run() {
+            HttpURLConnection connection = null;
+            try {
+              Prefs prefs = new Prefs(context);
+              String payload =
+                  "{\"code\":"
+                      + jsonString(code)
+                      + ",\"uid\":"
+                      + jsonString(prefs.uid())
+                      + ",\"name\":"
+                      + jsonString(prefs.name())
+                      + ",\"body\":"
+                      + jsonString(body)
+                      + "}";
+              connection = openJson("/api/say", payload);
+              int status = connection.getResponseCode();
+              if (status == 200) {
+                callback.onResult(null);
+              } else {
+                callback.onResult(parseError(connection) + " (чат)");
+              }
+            } catch (Exception error) {
+              callback.onResult("не вдалося надіслати");
+            } finally {
+              if (connection != null) connection.disconnect();
+            }
+          }
+        });
+  }
+
+  /** Мінімальний розбір JSON масиву messages — без сторонніх бібліотек. */
+  private static java.util.List<Message> parseChat(String json) {
+    java.util.List<Message> out = new java.util.ArrayList<Message>();
+    if (json == null) return out;
+    int at = json.indexOf("\"messages\"");
+    if (at < 0) return out;
+    int from = json.indexOf('[', at);
+    int to = json.lastIndexOf(']');
+    if (from < 0 || to <= from) return out;
+
+    int i = from + 1;
+    while (i < to) {
+      int objStart = json.indexOf('{', i);
+      if (objStart < 0 || objStart > to) break;
+      int objEnd = json.indexOf('}', objStart);
+      if (objEnd < 0) break;
+      String item = json.substring(objStart, objEnd + 1);
+      out.add(
+          new Message(
+              longField(item, "id"),
+              textField(item, "name"),
+              textField(item, "body"),
+              longField(item, "ts")));
+      i = objEnd + 1;
+    }
+    return out;
+  }
+
+  private static long longField(String json, String key) {
+    String marker = "\"" + key + "\":";
+    int at = json.indexOf(marker);
+    if (at < 0) return 0;
+    int i = at + marker.length();
+    int end = i;
+    while (end < json.length() && "0123456789-".indexOf(json.charAt(end)) >= 0) end++;
+    try {
+      return end > i ? Long.parseLong(json.substring(i, end)) : 0;
+    } catch (NumberFormatException error) {
+      return 0;
+    }
+  }
+
+  /** Читає рядкове поле, знімаючи лапки та екрановані символи. */
+  private static String textField(String json, String key) {
+    String marker = "\"" + key + "\":\"";
+    int at = json.indexOf(marker);
+    if (at < 0) return "";
+    int i = at + marker.length();
+    StringBuilder out = new StringBuilder();
+    while (i < json.length()) {
+      char c = json.charAt(i);
+      if (c == '\\' && i + 1 < json.length()) {
+        char next = json.charAt(i + 1);
+        if (next == 'n') out.append('\n');
+        else if (next == 't') out.append('\t');
+        else if (next == 'r') out.append('\r');
+        else if (next == 'u' && i + 5 < json.length()) {
+          try {
+            out.append((char) Integer.parseInt(json.substring(i + 2, i + 6), 16));
+          } catch (NumberFormatException error) {
+            out.append(next);
+          }
+          i += 6;
+          continue;
+        } else out.append(next);
+        i += 2;
+        continue;
+      }
+      if (c == '"') break;
+      out.append(c);
+      i++;
+    }
+    return out.toString();
+  }
+
   /**
    * Повідомляє серверу, що цей телефон тепер у групі.
    * Роботи це до першої GPS-точки: людина одразу з'являється на мапі
@@ -80,7 +246,44 @@ public final class Api {
     }
   }
 
+  /** GET із таймаутами — спільна точка для читання. */
+  private static HttpURLConnection open(String fullUrl) throws Exception {
+    HttpURLConnection connection = (HttpURLConnection) new URL(fullUrl).openConnection();
+    connection.setRequestMethod("GET");
+    connection.setConnectTimeout(10000);
+    connection.setReadTimeout(10000);
+    connection.setRequestProperty("Accept", "application/json");
+    return connection;
+  }
+
+  /** POST із JSON-тілом. */
+  private HttpURLConnection openJson(String path, String body) throws Exception {
+    HttpURLConnection connection =
+        (HttpURLConnection) new URL(new Prefs(context).api() + path).openConnection();
+    connection.setRequestMethod("POST");
+    connection.setDoOutput(true);
+    connection.setConnectTimeout(10000);
+    connection.setReadTimeout(10000);
+    connection.setRequestProperty("Content-Type", "application/json");
+    connection.setRequestProperty("Accept", "application/json");
+    connection.getOutputStream().write(body.getBytes("UTF-8"));
+    connection.getOutputStream().close();
+    return connection;
+  }
+
+  /** Текст помилки з відповіді сервера, якщо його вдалося прочитати. */
+  private static String parseError(HttpURLConnection connection) {
+    try {
+      java.io.InputStream stream = connection.getErrorStream();
+      if (stream == null) return "Сервер відповів помилкою";
+      return textField(read(stream), "error");
+    } catch (Exception error) {
+      return "Сервер відповів помилкою";
+    }
+  }
+
   private static String jsonString(String value) {
+    if (value == null) return "\"\"";
     StringBuilder out = new StringBuilder("\"");
     for (int i = 0; i < value.length(); i++) {
       char c = value.charAt(i);

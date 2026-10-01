@@ -78,7 +78,7 @@ public final class Prefs {
     return API;
   }
 
-  /** Посилання на мапу з кодом у фрагменті: сервер коду не бачить. */
+  /** Посилання на мапу з кодом у фрагменті: сайт GitHub коду не отримує. */
   public String mapUrl() {
     return MAP + "/#" + code();
   }
@@ -105,6 +105,11 @@ public final class Prefs {
     if (input == null) return "";
     String text = input.trim();
     if (text.isEmpty()) return "";
+
+    // mayachok://join/код — беремо лише останній сегмент шляху,
+    // інакше в код просочилися б слова «mayachok» та «join».
+    int slash = text.lastIndexOf('/');
+    if (slash >= 0 && slash < text.length() - 1) text = text.substring(slash + 1);
 
     // код зберігається у фрагменті після '#' — беремо саме його
     int hash = text.lastIndexOf('#');
