@@ -8,7 +8,24 @@ const USER_RETENTION_DAYS = 30; // неактивні користувачі в�
 const MAX_NAME_LEN = 24;
 const MAX_TRACK_POINTS = 500; // спрощення сліду на сервері
 
-const CODE_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz'; // без i, l, o, u — щоб не плутати
+// Алфавіт без i, l, o, u — щоб не плутати при диктуванні телефоном.
+// 12 символів × 5 біт = 60 біт: перебір неможливий, а набирається легко.
+const CODE_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
+const CODE_LENGTH = 12;
+
+function newCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(CODE_LENGTH));
+  let out = '';
+  for (const b of bytes) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
+  // Групуємо по 4: k7qm-2x9d-rt4b — так легше читати вголос і вводити.
+  return out.match(/.{1,4}/g).join('-');
+}
+
+/** Приводить код до канонічного вигляду: без дефісів, у нижньому регістрі. */
+function normalizeCode(code) {
+  if (typeof code !== 'string') return '';
+  return code.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -27,18 +44,10 @@ function bad(message) {
   return json({ error: message }, 400);
 }
 
-function newCode() {
-  const bytes = crypto.getRandomValues(new Uint8Array(24));
-  let out = '';
-  for (const b of bytes) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
-  return out;
-}
-
 async function groupIdFor(code) {
-  if (typeof code !== 'string') return null;
-  const trimmed = code.trim();
-  if (trimmed.length < 8 || trimmed.length > 64) return null;
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(trimmed));
+  const normalized = normalizeCode(code);
+  if (normalized.length < 8 || normalized.length > 64) return null;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
   return hex.slice(0, 16);
 }

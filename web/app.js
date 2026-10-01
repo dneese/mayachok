@@ -16,18 +16,39 @@ const state = {
 };
 
 let map = null;
+let started = false;
 
 const $ = (id) => document.getElementById(id);
 
 // --- код групи з hash ---
 function codeFromHash() {
   const raw = decodeURIComponent(location.hash.replace(/^#/, '')).trim();
-  return raw.length >= 8 && raw.length <= 64 ? raw : null;
+  const clean = raw.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return clean.length >= 8 && clean.length <= 64 ? clean : null;
+}
+
+// Зміна лише хеша не перезавантажує документ, тому start() треба
+// викликати вручну — інакше ворота лишаються на екрані.
+function applyCode(code) {
+  state.code = code;
+  $('code-input').value = code;
+  start();
 }
 
 function setCode(code) {
-  location.replace('#' + encodeURIComponent(code));
+  const encoded = '#' + encodeURIComponent(code);
+  if (location.hash === encoded) {
+    applyCode(code);
+    return;
+  }
+  history.replaceState(null, '', location.pathname + location.search + encoded);
+  applyCode(code);
 }
+
+window.addEventListener('hashchange', () => {
+  const code = codeFromHash();
+  if (code) applyCode(code);
+});
 
 // --- форматування ---
 function timeAgo(ts, now) {
@@ -251,6 +272,8 @@ function showGate() {
 }
 
 function start() {
+  if (started) return;
+  started = true;
   $('gate').classList.add('hidden');
   initMap();
   poll();
