@@ -8,8 +8,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT="build"
-VERSION_CODE=2
-VERSION_NAME="1.2"
+VERSION_CODE=3
+VERSION_NAME="1.4"
 # Назва файлу в Releases лишається сталою: на неї посилаються застосунок,
 # веб-сторінка, README й текст запрошення. Перейменування зламало б усі старі
 # посилання, тож версію тримаємо в AndroidManifest.xml, а не в імені файлу.

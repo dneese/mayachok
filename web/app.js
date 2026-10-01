@@ -1,7 +1,7 @@
 /* Маячок — мапа групи. Код групи живе у location.hash і не йде на сервер. */
 
 const API = 'https://mayachok.kikikiska.workers.dev';
-const APK_URL = 'https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk';
+const PROJECT_URL = 'https://github.com/dneese/mayachok';
 
 const POLL_MS = 10000;
 const CHAT_POLL_MS = 3000;
@@ -78,8 +78,8 @@ function inviteText() {
     groupUrl() +
     '\n\nКод групи (якщо треба ввести вручну): ' +
     prettyCode(state.code) +
-    '\nЗастосунок для Android: ' +
-    APK_URL
+    '\nЗастосунок для Android (посилання на завантаження — у README): ' +
+    PROJECT_URL
   );
 }
 
@@ -590,10 +590,26 @@ function closeModal(id) {
 
 function start() {
   if (started) return;
+
+  // Leaflet приходить з CDN. Якщо він не завантажився — L не існує, і
+  // initMap() впав би з TypeError, залишивши сторінку з порожнім екраном.
+  // Тому перевіряємо ДО того, як ховати gate, і пояснюємо, що сталось.
+  if (typeof L === 'undefined') {
+    $('gate-error').textContent =
+      'Не вдалося завантажити карту (бібліотека Leaflet із CDN). Перевірте інтернет і оновіть сторінку.';
+    return;
+  }
+
+  try {
+    initMap();
+  } catch (error) {
+    $('gate-error').textContent = 'Карта не запустилася: ' + error.message;
+    return;
+  }
+
   started = true;
   $('gate').classList.add('hidden');
   document.body.classList.add('live');
-  initMap();
   poll();
   setInterval(poll, POLL_MS);
 

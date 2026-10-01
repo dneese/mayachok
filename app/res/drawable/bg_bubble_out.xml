@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Вихідний бульбашок: правый нижній кут гостріший — це «хвостик», як у Telegram. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/bubble_out" />
+    <corners
+        android:topLeftRadius="18dp"
+        android:topRightRadius="18dp"
+        android:bottomRightRadius="5dp"
+        android:bottomLeftRadius="18dp" />
+</shape>

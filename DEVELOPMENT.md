@@ -12,7 +12,7 @@
 | Мапа | Leaflet + OpenStreetMap, статика | [`web/`](web) |
 | CI | GitHub Actions (APK + Pages) | [`.github/workflows/`](.github/workflows) |
 
-APK ~40 КБ: жодних AndroidX, Google Play Services чи сторонніх бібліотек.
+APK ~70 КБ: жодних AndroidX, Google Play Services чи сторонніх бібліотек.
 Збірка без Gradle: `aapt2` → `javac` → `d8` → `apksigner`.
 
 ## Схема даних

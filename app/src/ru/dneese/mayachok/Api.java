@@ -33,12 +33,14 @@ public final class Api {
   /** Одне повідомлення чату. */
   public static final class Message {
     public final long id;
+    public final String uid;
     public final String name;
     public final String body;
     public final long ts;
 
-    Message(long id, String name, String body, long ts) {
+    Message(long id, String uid, String name, String body, long ts) {
       this.id = id;
+      this.uid = uid;
       this.name = name;
       this.body = body;
       this.ts = ts;
@@ -141,6 +143,7 @@ public final class Api {
       out.add(
           new Message(
               longField(item, "id"),
+              textField(item, "uid"),
               textField(item, "name"),
               textField(item, "body"),
               longField(item, "ts")));

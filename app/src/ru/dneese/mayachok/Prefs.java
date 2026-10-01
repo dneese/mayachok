@@ -15,9 +15,6 @@ public final class Prefs {
   private static final String API = "https://mayachok.kikikiska.workers.dev";
   private static final String MAP = "https://dneese.github.io/mayachok";
   private static final String GITHUB = "https://github.com/dneese/mayachok";
-  private static final String APK =
-      "https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk";
-
   private final SharedPreferences sp;
 
   public Prefs(Context context) {
@@ -74,6 +71,34 @@ public final class Prefs {
     sp.edit().putBoolean("tracking", tracking).apply();
   }
 
+  /**
+   * Чи показувати сповіщення про нові повідомлення, коли застосунок закритий.
+   * За замовчуванням увімкнено: користувач сам вирішує, чи йому потрібен цей фон.
+   */
+  public boolean chatAlerts() {
+    return sp.getBoolean("chat_alerts", true);
+  }
+
+  public void setChatAlerts(boolean enabled) {
+    sp.edit().putBoolean("chat_alerts", enabled).apply();
+  }
+
+  /**
+   * Водяна позначка чату: id останнього повідомлення, про яке користувач уже знає.
+   * Спільна для екрана чату й фонового сервісу — тому вони не дублюють одне одному.
+   */
+  public long chatSeenId() {
+    try {
+      return Long.parseLong(sp.getString("chat_seen_id", "0"));
+    } catch (NumberFormatException error) {
+      return 0;
+    }
+  }
+
+  public void setChatSeenId(long id) {
+    sp.edit().putString("chat_seen_id", String.valueOf(id)).apply();
+  }
+
   public String api() {
     return API;
   }
@@ -87,9 +112,11 @@ public final class Prefs {
     return GITHUB;
   }
 
-  public String apkUrl() {
-    return APK;
-  }
+  /**
+   * Застосунок не дає прямого посилання на APK: користувач іде на сторінку
+   * проєкту, де в README лежить посилання на останню збірку. Так ми ніколи
+   * не роздаємо застарілі файли, навіть якщо хтось збере старе посилання.
+   */
 
   /** Пряме посилання, яке відкриває застосунок (якщо його встановлено). */
   public String deepLink() {
@@ -130,7 +157,7 @@ public final class Prefs {
             + "Відкрий ось це посилання — і ти в групі:%n%s%n%n"
             + "Код групи (якщо треба ввести вручну): %s%n"
             + "Застосунок для Android: %s",
-        mapUrl(), prettyCode(), APK);
+        mapUrl(), prettyCode(), GITHUB);
   }
 
   /**

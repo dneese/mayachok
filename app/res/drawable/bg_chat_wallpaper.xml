@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Шпалера чату: тайл 36×36 з двома крапками, повторюється на весь екран. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/chat_tile"
+    android:tileMode="repeat" />
