@@ -42,7 +42,11 @@ fi
 echo "==> база $DB_NAME ($DB_ID)"
 
 # --- резервна копія перед будь-якими змінами ---
-BACKUP="backup-users-$(date +%Y%m%d-%H%M%S).json"
+# Копія НЕ має потрапляти в git: там uid, імена та координати реальних
+# людей. Тому пишемо поза репозиторієм за замовчуванням.
+BACKUP_DIR="${BACKUP_DIR:-$HOME/mayachok-backups}"
+mkdir -p "$BACKUP_DIR"
+BACKUP="$BACKUP_DIR/backup-users-$(date +%Y%m%d-%H%M%S).json"
 echo "==> резервна копія users -> $BACKUP"
 curl -sS -X POST "$API/d1/database/$DB_ID/query" \
   -H "Authorization: Bearer $CF_API_TOKEN" \

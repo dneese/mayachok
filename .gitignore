@@ -6,6 +6,10 @@ app/src/ru/dneese/mayachok/BuildConfig.java
 # Деплой
 .deploy/
 
+# Бекапи бази: uid, імена та координати реальних людей
+backup-users-*.json
+mayachok-backups/
+
 # Секрети (у жодному разі не комітити)
 *.keystore
 *.jks
