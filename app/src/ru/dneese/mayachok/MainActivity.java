@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.format.DateUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebResourceError;
@@ -19,47 +20,32 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
-import android.widget.CheckBox;
-import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
-import java.text.SimpleDateFormat;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 
 /**
- * Один екран і три вкладки: Група → Мапа → Чат.
+ * Один екран і дві вкладки: Група → Мапа.
  *
  * Вкладки перемикаються нижнім меню, а апаратна кнопка «назад» завжди
- * повертає на Групу. Ключова деталь: назад НІКОЛИ не віддається WebView, бо
+ * повертає на Групу. Ключова деталь: назад НІКОЛЕЙ не віддається WebView, бо
  * той інакше повертається на about:blank — це давало білий екран.
  */
 public final class MainActivity extends Activity {
   private static final int REQ_LOCATION = 10;
-  private static final int REQ_NOTIFICATIONS = 11;
-  private static final int REQ_CHAT_ALERTS = 12;
   // Інтервал опитування GPS. 10 секунд прибрано: з порогом 100 м воно
   // лише тримало GPS-модуль увімкненим майже постійно, не додаючи точності.
   private static final int[] INTERVALS = {30, 60, 120, 300};
 
-  /** ChatService ставить цей прапорець: відкритися одразу на чаті. */
-  public static final String EXTRA_OPEN_CHAT = "open_chat";
-
   /** Вкладки. */
   private static final int TAB_GROUP = 0;
   private static final int TAB_MAP = 1;
-  private static final int TAB_CHAT = 2;
 
-  private static final int[] TITLES = {
-    R.string.app_name, R.string.tab_map, R.string.tab_chat,
-  };
+  private static final int[] TITLES = {R.string.app_name, R.string.tab_map};
 
   private Prefs prefs;
   private Api api;
@@ -79,32 +65,17 @@ public final class MainActivity extends Activity {
 
   private Spinner intervalSpinner;
   private Button toggle;
-  private CheckBox chatAlertsBox;
 
   private View mainPanel;
   private LinearLayout mapPanel;
-  private View chatPanel;
   private View[] tabs;
   private TextView[] tabTexts;
   private WebView mapView;
   private View mapError;
-  private ScrollView chatLog;
-  private LinearLayout chatList;
-  private TextView chatEmpty;
-  private EditText chatInput;
-
-  private int currentTab = TAB_GROUP;
   private boolean mapLoaded; // сторінку мапи вже відкривали
   private boolean mapFailed;
-  private long lastMessageId;
-  private boolean chatStarted; // чат уже підписаний на оновлення
 
-  // Групування повідомлень у бульбашки: поки той самий відправник і не минуло
-  // GROUP_WINDOW_MS, наступне повідомлення продовжує попереднє.
-  private static final long GROUP_WINDOW_MS = 5 * 60 * 1000L;
-  private String lastRunSender;
-  private long lastRunAt;
-  private int lastRenderedDay = -1; // для роздільника дат; -1 — ще не було
+  private int currentTab = TAB_GROUP;
 
   private final Handler ticker = new Handler(Looper.getMainLooper());
 
@@ -134,18 +105,11 @@ public final class MainActivity extends Activity {
 
     mainPanel = findViewById(R.id.main_panel);
     mapPanel = findViewById(R.id.map_panel);
-    chatPanel = findViewById(R.id.chat_panel);
     mapView = findViewById(R.id.map_view);
-    chatLog = findViewById(R.id.chat_log);
-    chatList = findViewById(R.id.chat_list);
-    chatEmpty = findViewById(R.id.chat_empty);
-    chatInput = findViewById(R.id.chat_input);
-    chatAlertsBox = findViewById(R.id.chat_alerts);
 
-    tabs = new View[] {findViewById(R.id.tab_group), findViewById(R.id.tab_map),
-        findViewById(R.id.tab_chat)};
-    tabTexts = new TextView[] {findViewById(R.id.tab_group_text), findViewById(R.id.tab_map_text),
-        findViewById(R.id.tab_chat_text)};
+    tabs = new View[] {findViewById(R.id.tab_group), findViewById(R.id.tab_map)};
+    tabTexts =
+        new TextView[] {findViewById(R.id.tab_group_text), findViewById(R.id.tab_map_text)};
 
     nameInput.setText(prefs.name());
     codeInput.setText(prefs.code());
@@ -185,10 +149,6 @@ public final class MainActivity extends Activity {
             public void onClick(View view) {
               if (index == TAB_MAP && !prefs.configured()) {
                 toast("Спершу створіть групу");
-                return;
-              }
-              if (index == TAB_CHAT && !prefs.configured()) {
-                toast(getString(R.string.chat_no_group));
                 return;
               }
               showTab(index);
@@ -241,15 +201,6 @@ public final class MainActivity extends Activity {
               }
             });
 
-    findViewById(R.id.chat)
-        .setOnClickListener(
-            new View.OnClickListener() {
-              @Override
-              public void onClick(View view) {
-                showTab(TAB_CHAT);
-              }
-            });
-
     findViewById(R.id.forget)
         .setOnClickListener(
             new View.OnClickListener() {
@@ -285,26 +236,6 @@ public final class MainActivity extends Activity {
             goBack();
           }
         });
-
-    chatAlertsBox.setOnCheckedChangeListener(
-        new CompoundButton.OnCheckedChangeListener() {
-          @Override
-          public void onCheckedChanged(CompoundButton button, boolean checked) {
-            // render() виставляє стан програмно, і ми не хочемо на кожне
-            // перемальовування екрана запускати й зупиняти сервіс: тому
-            // реагуємо лише на тап, а не на будь-яку зміну.
-            if (button.isPressed()) onChatAlertsToggled(checked);
-          }
-        });
-
-    findViewById(R.id.chat_send)
-        .setOnClickListener(
-            new View.OnClickListener() {
-              @Override
-              public void onClick(View view) {
-                sendChat();
-              }
-            });
   }
 
   /**
@@ -415,7 +346,6 @@ public final class MainActivity extends Activity {
     currentTab = tab;
     mainPanel.setVisibility(tab == TAB_GROUP ? View.VISIBLE : View.GONE);
     mapPanel.setVisibility(tab == TAB_MAP ? View.VISIBLE : View.GONE);
-    chatPanel.setVisibility(tab == TAB_CHAT ? View.VISIBLE : View.GONE);
 
     for (int i = 0; i < tabs.length; i++) {
       boolean active = i == tab;
@@ -438,23 +368,27 @@ public final class MainActivity extends Activity {
               mapView.invalidate();
             }
           });
-    } else if (tab == TAB_CHAT) {
-      startChat();
-    } else {
-      stopChat();
     }
 
     // Найважливіше для батареї. Сторінка мапи опитує API таймером раз на
     // 15 секунд, і setInterval у JavaScript НЕ зупиняється, коли вкладка
     // просто прихована. Без pauseTimers() ми вдень робимо ~26 тисяч запитів
-    // і тримаємо CPU та радіо ввімкненими дарма.
-    if (tab == TAB_MAP) mapView.resumeTimers();
-    else mapView.pauseTimers();
+    // і тримаємо CPU та радіо ввімкненими дарма. onPause() додатково
+    // зупиняє таймери всередині WebView (JAVA/SCRIPT) і анімації.
+    if (tab == TAB_MAP) {
+      mapView.resumeTimers();
+      mapView.onResume();
+    } else {
+      mapView.pauseTimers();
+      mapView.onPause();
+      // Не вантажимо далі тайли й не тримаємо з'єднання, поки мапа не на екрані.
+      mapView.stopLoading();
+    }
   }
 
   /**
-   * Без групи мапа й чат порожні, тож позначаємо їх тьмяними: видно, що
-   * вони є, але ще не готові. Активна вкладка лишається яскравою.
+   * Без групи мапа порожня, тож позначаємо її тьмяною: видно, що вона є,
+   * але ще не готова. Активна вкладка лишається яскравою.
    */
   private void updateTabAvailability() {
     boolean ready = prefs.configured();
@@ -476,12 +410,6 @@ public final class MainActivity extends Activity {
 
   @Override
   public void onBackPressed() {
-    // Клавіатура забирає назад першою — інакше не закриється.
-    View focused = getCurrentFocus();
-    if (focused != null && focused.getId() == R.id.chat_input) {
-      chatInput.clearFocus();
-      return;
-    }
     if (currentTab != TAB_GROUP) {
       showTab(TAB_GROUP);
       return;
@@ -501,298 +429,11 @@ public final class MainActivity extends Activity {
     mapLoaded = true;
   }
 
-  // --- чат ---
-
-  private void startChat() {
-    if (chatStarted) {
-      pullChat();
-      ticker.postDelayed(chatTick, 4000);
-      return;
-    }
-    chatStarted = true;
-    lastMessageId = 0;
-    chatList.removeAllViews();
-    // скидаємо стан групування, інакше перше повідомлення після
-    // повторного відкриття продовжить групу з попередньої сесії
-    lastRenderedDay = -1;
-    lastRunSender = null;
-    lastRunAt = 0;
-    chatEmpty.setVisibility(View.VISIBLE);
-    pullChat();
-    ticker.postDelayed(chatTick, 4000);
-  }
-
-  private void stopChat() {
-    // чат не має робити запити у фоні — інакше вони з’їдають батарею
-    ticker.removeCallbacks(chatTick);
-  }
-
-  private final Runnable chatTick =
-      new Runnable() {
-        @Override
-        public void run() {
-          if (currentTab != TAB_CHAT) return;
-          pullChat();
-          ticker.postDelayed(this, 4000);
-        }
-      };
-
-  private void pullChat() {
-    if (currentTab != TAB_CHAT || !prefs.configured()) return;
-    final long after = lastMessageId;
-    api.chat(
-        prefs.code(),
-        after,
-        new Api.ChatCallback() {
-          @Override
-          public void onResult(final List<Api.Message> messages, String error) {
-            runOnUiThread(
-                new Runnable() {
-                  @Override
-                  public void run() {
-                    if (messages == null || messages.isEmpty()) return;
-                    for (Api.Message message : messages) {
-                      // опитування могло налетіти двічі — не дублюємо
-                      if (message.id <= lastMessageId) continue;
-                      lastMessageId = message.id;
-                      addMessageRow(message);
-                    }
-                    // Показане на екрані повідомлення вже «прочитане»:
-                    // рухаємо спільну позначку, щоб ChatService не повідомив
-                    // про нього ще раз, поки ми просто дивилися в чат.
-                    prefs.setChatSeenId(lastMessageId);
-                    if (chatList.getChildCount() > 0) {
-                      chatEmpty.setVisibility(View.GONE);
-                      chatLog.post(
-                          new Runnable() {
-                            @Override
-                            public void run() {
-                              chatLog.fullScroll(ScrollView.FOCUS_DOWN);
-                            }
-                          });
-                    }
-                  }
-                });
-          }
-        });
-  }
-
-  /** Повідомлення у стилі Telegram: бульбашка з хвостиком, аватар, час у кінці. */
-  private void addMessageRow(Api.Message message) {
-    boolean mine = message.uid != null && message.uid.equals(prefs.uid());
-    String name = (message.name == null || message.name.trim().isEmpty()) ? "Хтось" : message.name.trim();
-
-    // Роздільник дат — новий день у стрічці чату.
-    Calendar day = Calendar.getInstance();
-    day.setTimeInMillis(message.ts * 1000L);
-    int dayKey = day.get(Calendar.YEAR) * 1000 + day.get(Calendar.DAY_OF_YEAR);
-    if (dayKey != lastRenderedDay) {
-      lastRenderedDay = dayKey;
-      chatList.addView(daySeparator(message.ts));
-    }
-
-    // Повідомлення того самого відправника за останні 5 хвилин — одна група:
-    // аватар і ім'я показуємо лише в першому, як у Telegram.
-    boolean sameRun =
-        lastRunSender != null
-            && lastRunSender.equals(mine ? "\u0000self" : message.uid)
-            && message.ts - lastRunAt <= GROUP_WINDOW_MS
-            && lastRunAt <= message.ts;
-    if (!sameRun) {
-      lastRunSender = mine ? "\u0000self" : message.uid;
-      lastRunAt = message.ts;
-    }
-    boolean firstInRun = !sameRun;
-
-    LinearLayout row = new LinearLayout(this);
-    row.setOrientation(LinearLayout.HORIZONTAL);
-    row.setGravity(mine ? Gravity.END : Gravity.START);
-    row.setPadding(0, firstInRun ? dp(8) : dp(1), 0, dp(1));
-
-    // Аватар лише для чужих повідомлень; для своїх — порожнє місце,
-    // щоб текст не «стрибав» убік між повідомленнями різних авторів.
-    View avatar = avatarView(name, mine ? "" : firstLetter(name));
-    row.addView(avatar);
-
-    LinearLayout bubble = new LinearLayout(this);
-    bubble.setOrientation(LinearLayout.VERTICAL);
-    bubble.setBackgroundResource(
-        mine
-            ? (firstInRun ? R.drawable.bg_bubble_out : R.drawable.bg_bubble_out_notail)
-            : (firstInRun ? R.drawable.bg_bubble_in : R.drawable.bg_bubble_in_notail));
-
-    int padH = dp(12);
-    int padTop = dp(7);
-    // низ більший, щоб час не стояв упритук до краю бульбашка
-    int padBottom = dp(6);
-
-    if (!mine && firstInRun) {
-      TextView sender = new TextView(this);
-      sender.setText(name);
-      sender.setTextSize(13);
-      sender.setTypeface(null, android.graphics.Typeface.BOLD);
-      sender.setTextColor(accentFor(message.uid));
-      sender.setPadding(padH, padTop - dp(2), padH, 0);
-      bubble.addView(sender);
-    }
-
-    // Текст і час в одному рядку: час притискається донизу праворуч,
-    // як у Telegram, а не висить окремим рядком над повідомленням.
-    LinearLayout line = new LinearLayout(this);
-    line.setOrientation(LinearLayout.HORIZONTAL);
-    line.setGravity(Gravity.BOTTOM);
-    line.setPadding(padH, mine ? padTop : 0, padH, padBottom);
-
-    TextView body = new TextView(this);
-    body.setText(message.body);
-    body.setTextSize(16);
-    body.setTextColor(Color.parseColor(mine ? "#FFFFFF" : "#111827"));
-    // maxWidth живе в TextView, а не в LayoutParams: без нього довге
-    // повідомлення розтягнуло б бульбашок на всю ширину екрана.
-    body.setMaxWidth(bubbleMaxWidth());
-    line.addView(body, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-    TextView meta = new TextView(this);
-    meta.setText(timeLabel(message, mine));
-    meta.setTextSize(11);
-    meta.setTextColor(Color.parseColor(mine ? "#C7DBFF" : "#8A94A6"));
-    meta.setPadding(dp(8), 0, 0, 0);
-    line.addView(
-        meta,
-        new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-    bubble.addView(line);
-
-    // Бульбашка не має розтягуватися на всю ширину — у Telegram
-    // довгі рядки переносяться, короткі залишаються вузькими.
-    row.addView(bubble, new LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-    chatList.addView(row);
-  }
-
-  /** Максимальна ширина бульбашка: 78% екрана мінус аватар і поля. */
-  private int bubbleMaxWidth() {
-    return (int) (getResources().getDisplayMetrics().widthPixels * 0.78f);
-  }
-
   /** Показує блок помилки замість карти й фіксує, що сторінка не завантажилась. */
   private void showMapError() {
     mapFailed = true;
     mapView.setVisibility(View.GONE);
     mapError.setVisibility(View.VISIBLE);
-  }
-
-  /** Час у бульбашку; для своїх — з галочкою, як «доставлено». */
-  private String timeLabel(Api.Message message, boolean mine) {
-    String time = new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date(message.ts));
-    return mine ? time + "  \u2713\u2713" : time;
-  }
-
-  /** Роздільник дат: сіра «таблетка» по центру, як у Telegram. */
-  private View daySeparator(long ts) {
-    TextView chip = new TextView(this);
-    Calendar then = Calendar.getInstance();
-    then.setTimeInMillis(ts * 1000L);
-    Calendar now = Calendar.getInstance();
-
-    long dayDiff = now.getTimeInMillis() - then.getTimeInMillis();
-    int todayDiff = (int) Math.round(dayDiff / 86400000.0d);
-    String label;
-    if (todayDiff == 0) {
-      label = "Сьогодні";
-    } else if (todayDiff == 1) {
-      label = "Вчора";
-    } else {
-      label = new SimpleDateFormat("d MMMM", Locale.getDefault()).format(new Date(ts));
-    }
-
-    chip.setText(label);
-    chip.setTextSize(12);
-    chip.setTextColor(Color.parseColor("#3D4657"));
-    chip.setBackgroundResource(R.drawable.bg_date_chip);
-    chip.setGravity(Gravity.CENTER);
-    chip.setPadding(dp(14), dp(4), dp(14), dp(4));
-
-    LinearLayout wrap = new LinearLayout(this);
-    wrap.setOrientation(LinearLayout.HORIZONTAL);
-    wrap.setGravity(Gravity.CENTER);
-    wrap.setPadding(0, dp(10), 0, dp(10));
-    wrap.addView(
-        chip,
-        new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-    return wrap;
-  }
-
-  private static String firstLetter(String name) {
-    if (name == null || name.isEmpty()) return "?";
-    return name.substring(0, 1).toUpperCase(Locale.getDefault());
-  }
-
-  /** Круглий аватар: для своїх повідомлень порожній, щоб ширина рядка не змінювалась. */
-  private View avatarView(String name, String letter) {
-    TextView avatar = new TextView(this);
-    avatar.setText(letter);
-    avatar.setTextSize(15);
-    avatar.setTypeface(null, android.graphics.Typeface.BOLD);
-    avatar.setGravity(Gravity.CENTER);
-    avatar.setTextColor(Color.WHITE);
-    avatar.setBackgroundResource(R.drawable.bg_avatar);
-    avatar.setBackgroundTintList(android.content.res.ColorStateList.valueOf(accentFor(name)));
-    if (letter.isEmpty()) avatar.setVisibility(View.INVISIBLE);
-    int size = dp(36);
-    LinearLayout.LayoutParams params =
-        new LinearLayout.LayoutParams(size, size);
-    params.setMargins(0, dp(2), dp(8), 0);
-    avatar.setLayoutParams(params);
-    return avatar;
-  }
-
-  /** Колір аватара й імені — стабільний для одного uid, як у Telegram. */
-  private int accentFor(String seed) {
-    int[] palette = {
-      Color.parseColor("#E17076"),
-      Color.parseColor("#7BC862"),
-      Color.parseColor("#65AADD"),
-      Color.parseColor("#A695E7"),
-      Color.parseColor("#EE7AAE"),
-      Color.parseColor("#6EC9CB"),
-      Color.parseColor("#F2A65A"),
-    };
-    int hash = 0;
-    String text = seed == null ? "" : seed;
-    for (int i = 0; i < text.length(); i++) hash = hash * 31 + text.charAt(i);
-    return palette[Math.abs(hash) % palette.length];
-  }
-
-  private void sendChat() {
-    if (!prefs.configured()) return;
-    final String text = chatInput.getText().toString().trim();
-    if (text.isEmpty()) return;
-    chatInput.setText("");
-
-    api.say(
-        prefs.code(),
-        text,
-        new Api.SayCallback() {
-          @Override
-          public void onResult(String error) {
-            runOnUiThread(
-                new Runnable() {
-                  @Override
-                  public void run() {
-                    if (error == null) {
-                      pullChat();
-                    } else {
-                      chatInput.setText(text); // не даємо загубити написане
-                      toast(error);
-                    }
-                  }
-                });
-          }
-        });
   }
 
   // --- життєвий цикл ---
@@ -801,19 +442,25 @@ public final class MainActivity extends Activity {
   protected void onResume() {
     super.onResume();
     render();
-    if (currentTab == TAB_CHAT) startChat();
     // відновлюємо таймери мапи лише якщо вона на екрані — інакше вони
     // пішли б буркотіти у фоні
-    if (currentTab == TAB_MAP) mapView.resumeTimers();
+    if (currentTab == TAB_MAP) {
+      mapView.resumeTimers();
+      mapView.onResume();
+    }
+    // Рядок статусу має показувати «остання точка: N хв тому» чесно, тож
+    // перечитуємо його раз на півхвилини, поки екран відкритий.
+    ticker.postDelayed(statusTick, 30 * 1000L);
   }
 
   @Override
   protected void onPause() {
     super.onPause();
-    stopChat();
+    ticker.removeCallbacks(statusTick);
     // Застосунок у фоні або екран вимкнено — таймери мапи зупиняються,
     // інакше вона ганяла б запити в кишені всю ніч.
     mapView.pauseTimers();
+    mapView.onPause();
   }
 
   @Override
@@ -821,13 +468,17 @@ public final class MainActivity extends Activity {
     super.onNewIntent(intent);
     setIntent(intent);
     handleDeepLink(intent);
-    // тап по сповіщенню про повідомлення має відкрити саме чат
-    if (intent != null && intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) {
-      intent.removeExtra(EXTRA_OPEN_CHAT);
-      showTab(TAB_CHAT);
-    }
     render();
   }
+
+  private final Runnable statusTick =
+      new Runnable() {
+        @Override
+        public void run() {
+          render();
+          ticker.postDelayed(this, 30 * 1000L);
+        }
+      };
 
   /** mayachok://join/xxxx-xxxx-xxxx — запрошення відкриває застосунок. */
   private void handleDeepLink(Intent intent) {
@@ -868,7 +519,6 @@ public final class MainActivity extends Activity {
                       mapLoaded = false;
                       toast("Групу створено");
                       if (!prefs.isTracking()) startTracking();
-                      syncChatWatcher();
                     } else {
                       toast(error);
                     }
@@ -901,7 +551,6 @@ public final class MainActivity extends Activity {
     prefs.setIntervalSeconds(INTERVALS[intervalSpinner.getSelectedItemPosition()]);
     mapLoaded = false;
     render();
-    syncChatWatcher();
 
     joinButton.setEnabled(false);
     api.join(
@@ -921,7 +570,6 @@ public final class MainActivity extends Activity {
                     }
                     toast("Ви в групі");
                     if (!prefs.isTracking()) startTracking();
-                    syncChatWatcher();
                   }
                 });
           }
@@ -939,7 +587,6 @@ public final class MainActivity extends Activity {
               @Override
               public void onClick(android.content.DialogInterface dialog, int which) {
                 stopTracking();
-                stopChatWatcher();
                 // Спочатку просимо сервер стерти людину: інакше вона лишилася
                 // б на мапі в усіх, хто в тій групі. Код зберігаємо у змінній,
                 // бо нижче його вже скинуто.
@@ -952,16 +599,23 @@ public final class MainActivity extends Activity {
                         public void onResult(String error) {
                           // Помилка не заважає: локально групу ми вже забули,
                           // а стару точку прибере щоденне прибирання бази.
-                          if (error != null) toast("Не вдалося стерти слід у групі");
+                          // Обов'язково через runOnUiThread: callback приходить
+                          // з фонового потоку, а Toast з нього — це падіння.
+                          if (error == null) return;
+                          runOnUiThread(
+                              new Runnable() {
+                                @Override
+                                public void run() {
+                                  toast("Не вдалося стерти слід у групі");
+                                }
+                              });
                         }
                       });
                 }
                 prefs.setCode("");
                 // нова водяна позначка: у новій групі старі id не мають значення
-                prefs.setChatSeenId(0);
                 codeInput.setText("");
                 mapLoaded = false;
-                chatStarted = false;
                 showTab(TAB_GROUP);
                 render();
               }
@@ -969,7 +623,13 @@ public final class MainActivity extends Activity {
         .show();
   }
 
-  /** Показує або ховає блоки залежно від того, чи є вже група. */
+  /**
+   * Стан трекера — чесний, а не «користувач натиснув кнопку».
+   *
+   * Раніше тут було лише «Трекер працює у фоні», і саме через це було
+   * незрозуміло, надсилає застосунок точки чи ні: коли процес убито або
+   * мережа лягла, екран всё одно показував зелену крапку.
+   */
   private void render() {
     boolean hasGroup = prefs.configured();
 
@@ -982,19 +642,16 @@ public final class MainActivity extends Activity {
     }
     updateTabAvailability();
 
-    // Ставимо стан програмно: слухач перемикача реагує лише на тап, тож
-    // render() не перезапускає сервіс на кожному перемальовуванні екрана.
-    chatAlertsBox.setChecked(prefs.chatAlerts());
-    chatAlertsBox.setEnabled(hasGroup);
-    chatAlertsBox.setAlpha(hasGroup ? 1f : 0.4f);
-
     boolean tracking = isTracking();
     toggle.setText(tracking ? R.string.btn_stop : R.string.btn_start);
 
     int dotColor;
     if (tracking) {
-      status.setText(R.string.status_on);
-      dotColor = Color.parseColor("#16A34A");
+      status.setText(trackingStatus());
+      String error = prefs.lastSendError();
+      // Помилка важливіша за «працює»: саме вона пояснює, чому точка не рухається.
+      if (!error.isEmpty()) dotColor = Color.parseColor("#DC2626");
+      else dotColor = Color.parseColor("#16A34A");
     } else if (hasGroup) {
       status.setText(R.string.status_ready);
       dotColor = Color.parseColor("#D97706");
@@ -1003,6 +660,22 @@ public final class MainActivity extends Activity {
       dotColor = Color.parseColor("#9CA3AF");
     }
     statusDot.setBackgroundTintList(android.content.res.ColorStateList.valueOf(dotColor));
+  }
+
+  private String trackingStatus() {
+    String error = prefs.lastSendError();
+    if (!error.isEmpty()) return "Не надсилається: " + error;
+
+    long sent = prefs.lastSentAt();
+    if (sent <= 0) return getString(R.string.status_on) + " — чекаємо першу точку";
+
+    long age = System.currentTimeMillis() - sent;
+    // Понад годину без точок — це вже не нормально, а ознака проблеми.
+    String ago =
+        DateUtils.getRelativeTimeSpanString(
+                sent, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
+            .toString();
+    return "Остання точка: " + ago + (age > 60 * 60 * 1000L ? " (завжди так довго?)" : "");
   }
 
   private void shareInvite() {
@@ -1056,11 +729,6 @@ public final class MainActivity extends Activity {
       requestPermissions(new String[] {Manifest.permission.ACCESS_FINE_LOCATION}, REQ_LOCATION);
       return;
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-        && !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
-      requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
-      return;
-    }
 
     Intent service = new Intent(this, TrackerService.class);
     service.setAction("start");
@@ -1068,10 +736,8 @@ public final class MainActivity extends Activity {
     else startService(service);
 
     prefs.setTracking(true);
+    prefs.setLastSendError("");
     render();
-    // дозвіл на сповіщення щойно міг бути виданий разом із трекером —
-    // тож користуваємося нагодою запустити й стеження за чатом
-    syncChatWatcher();
   }
 
   private void stopTracking() {
@@ -1083,72 +749,20 @@ public final class MainActivity extends Activity {
     render();
   }
 
-  /**
-   * Фонове стеження за чатом. Запускається, щойно є група, і лише якщо
-   * користувач не вимкнув перемикач — без дозволу на сповіщення Android
-   * просто не покаже нічого, тож не мучимо його зайвим сервісом.
-   */
-  private void syncChatWatcher() {
-    if (!prefs.configured() || !prefs.chatAlerts()) {
-      stopChatWatcher();
-      return;
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-        && !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
-      return;
-    }
-    Intent service = new Intent(this, ChatService.class);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(service);
-    else startService(service);
-  }
-
-  private void stopChatWatcher() {
-    stopService(new Intent(this, ChatService.class));
-  }
-
-  /** Перемикач «сповіщати про повідомлення» на екрані групи. */
-  private void onChatAlertsToggled(boolean enabled) {
-    prefs.setChatAlerts(enabled);
-    if (!enabled) {
-      stopChatWatcher();
-      return;
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-        && !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
-      requestPermissions(
-          new String[] {Manifest.permission.POST_NOTIFICATIONS}, REQ_CHAT_ALERTS);
-      return;
-    }
-    syncChatWatcher();
-  }
-
   private void toast(String text) {
     if (text == null) return;
     Toast.makeText(this, text, Toast.LENGTH_LONG).show();
   }
 
   @Override
-  public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-    super.onRequestPermissionsResult(requestCode, permissions, results);
-    if (requestCode == REQ_LOCATION) {
+  public void onRequestPermissionsResult(
+      int code, String[] permissions, int[] results) {
+    super.onRequestPermissionsResult(code, permissions, results);
+    if (code == REQ_LOCATION) {
       if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
         startTracking();
       } else {
         toast("Без геолокації трекер не працює");
-      }
-    } else if (requestCode == REQ_NOTIFICATIONS) {
-      if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) startTracking();
-    } else if (requestCode == REQ_CHAT_ALERTS) {
-      // перемикач увімкнено, але Android питав дозволу: без нього
-      // повідомлення не показуються — тож запускаємо сервіс лише після згоди
-      if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-        prefs.setChatAlerts(true);
-        chatAlertsBox.setChecked(true);
-        syncChatWatcher();
-      } else {
-        prefs.setChatAlerts(false);
-        chatAlertsBox.setChecked(false);
-        toast("Без дозволу сповіщення не працюватимуть");
       }
     }
   }

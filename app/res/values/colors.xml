@@ -26,8 +26,6 @@
     <color name="bubble_in_border">#E8EAF0</color>
     <color name="bubble_in_text">#111827</color>
     <color name="bubble_in_meta">#8A94A6</color>
-    <color name="chat_wallpaper">#EEF1F6</color>
-    <color name="chat_wallpaper_dot">#DFE4EC</color>
     <color name="date_chip">#D6DEE9</color>
     <color name="date_chip_text">#3D4657</color>
 

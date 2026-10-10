@@ -72,31 +72,28 @@ public final class Prefs {
   }
 
   /**
-   * Чи показувати сповіщення про нові повідомлення, коли застосунок закритий.
-   * За замовчуванням увімкнено: користувач сам вирішує, чи йому потрібен цей фон.
+   * Коли востаннє точка ДІЙСНО пішла на сервер.
+   *
+   * Прапорця tracking недостатньо: він означає «користувач натиснув Почати»,
+   * а не «дані йдуть». Різниця стає помітною, коли процес убито або мережа
+   * лягла: екран показував «Трекер працює у фоні», а точка не йшла годину.
+   * Тепер екран показує реальний час останньої відправки.
    */
-  public boolean chatAlerts() {
-    return sp.getBoolean("chat_alerts", true);
+  public long lastSentAt() {
+    return sp.getLong("last_sent_at", 0L);
   }
 
-  public void setChatAlerts(boolean enabled) {
-    sp.edit().putBoolean("chat_alerts", enabled).apply();
+  public void setLastSentAt(long at) {
+    sp.edit().putLong("last_sent_at", at).apply();
   }
 
-  /**
-   * Водяна позначка чату: id останнього повідомлення, про яке користувач уже знає.
-   * Спільна для екрана чату й фонового сервісу — тому вони не дублюють одне одному.
-   */
-  public long chatSeenId() {
-    try {
-      return Long.parseLong(sp.getString("chat_seen_id", "0"));
-    } catch (NumberFormatException error) {
-      return 0;
-    }
+  /** Текст останньої помилки надсилання або порожній рядок, якщо все добре. */
+  public String lastSendError() {
+    return sp.getString("last_send_error", "");
   }
 
-  public void setChatSeenId(long id) {
-    sp.edit().putString("chat_seen_id", String.valueOf(id)).apply();
+  public void setLastSendError(String error) {
+    sp.edit().putString("last_send_error", error == null ? "" : error).apply();
   }
 
   public String api() {

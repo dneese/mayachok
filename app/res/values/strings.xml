@@ -22,14 +22,8 @@
     <string name="btn_share">Поділитися посиланням</string>
     <string name="btn_copy_link">Скопіювати посилання</string>
     <string name="btn_map">Мапа</string>
-    <string name="btn_chat">Чат</string>
     <string name="btn_back">Назад</string>
-    <string name="chat_empty">Повідомлень ще немає. Напишіть перше — решта групи побачить його одразу.</string>
-    <string name="chat_hint">Повідомлення…</string>
-    <string name="chat_send">OK</string>
     <string name="btn_forget">Вийти з групи</string>
-    <string name="label_chat_alerts">Сповіщати про повідомлення</string>
-    <string name="hint_chat_alerts">Працює, коли застосунок закритий. Витрачає трохи батареї.</string>
     <string name="forget_confirm">Вийти з групи? Трекер зупиниться, а інші побачать, що вас більше немає на карті. Код групи буде забуто.</string>
 
     <!-- 3. трекер -->
@@ -40,19 +34,15 @@
 
     <!-- 4. довідка -->
     <string name="label_help">4. Довідка</string>
-    <string name="hint_help">Всім у групі видно одне одного. Точка зникає через 30 хв без оновлень.</string>
+    <string name="hint_help">Всім у групі видно одне одного. Точка не зникає: якщо людина давно онлайн, видно, де вона востаннє була.</string>
     <string name="btn_github">Проєкт</string>
 
     <!-- нижнє меню -->
     <string name="tab_group">Група</string>
     <string name="tab_map">Мапа</string>
-    <string name="tab_chat">Чат</string>
 
     <!-- мапа всередині застосунку -->
     <string name="map_error">Не вдалося завантажити мапу</string>
     <string name="map_retry">Спробувати ще раз</string>
     <string name="map_hint">Потрібен інтернет. Мапа з\'явиться тут, не відкриваючи браузер.</string>
-
-    <!-- чат -->
-    <string name="chat_no_group">Спершу створіть групу — тоді можна писати в чат</string>
 </resources>

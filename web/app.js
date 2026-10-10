@@ -3,13 +3,17 @@
 const API = 'https://mayachok.kikikiska.workers.dev';
 const PROJECT_URL = 'https://github.com/dneese/mayachok';
 
-// Опитування мапи: 15 секунд. Раніше 10 — різниця не помітна оком,
-// а запитів на 1/3 менше.
+// Опитування мапи: 15 секунд, поки в групі є хтось свіжий. Раніше 10 —
+// різниця не помітна оком, а запитів на 1/3 менше.
 const POLL_MS = 15000;
-// Чат: 5 секунд замість 3. Людина читає повідомлення очима, а не очима
-// програміста — 3 секунди нічого не додає, а батарею їсть.
-const CHAT_POLL_MS = 5000;
-const FRESH_MS = 2 * 60 * 1000;
+// Коли всі точки застаріли (або людей не видно), руху не чекати — питаємо
+// рідше. За одну годину це 240 запитів замість 2400, і глядач на телефоні
+// менше сідає на радіо просто через відкриту вкладку.
+const IDLE_POLL_MS = 60000;
+// Сервер надсилає свій staleAfterMs; це лише запасний варіант, поки
+// перша відповідь ще не прийшла. Раніше тут було 2 хвилини, через що маркер
+// сірів утричі раніше, ніж обіцяє сервер і README.
+const FRESH_MS = 30 * 60 * 1000;
 
 const state = {
   code: null,
@@ -17,17 +21,13 @@ const state = {
   markers: new Map(),
   selected: null,
   hours: 12,
-  // чат
-  lastMessageId: 0,
-  chatName: '',
-  tab: 'people',
-  unread: 0,
+  // серверний час, після якого маркер вважається сірим
+  staleAfterMs: FRESH_MS,
 };
 
 let map = null;
 let started = false;
 let mapTimer = null;
-let chatTimer = null;
 let editing = null; // uid, чию саме ім'я редагують
 
 const $ = (id) => document.getElementById(id);
@@ -135,7 +135,18 @@ function displayName(user) {
 }
 
 function isFresh(ts, now) {
-  return now - ts < FRESH_MS;
+  return now - ts < state.staleAfterMs;
+}
+
+/**
+ * Точність, якій можна довіряти на око.
+ *
+ * Телефон у приміщенні не має GPS-сигналу й надсилає точку за мережею:
+ * вона справжня, але може відрізнятися на сотні метрів. Такі точки
+ * позначаємо «приблизно», щоб не було непорозумінь.
+ */
+function isAccurate(acc) {
+  return acc <= 100;
 }
 
 // Стійкий колір на основі uid: різна людина — різний колір.
@@ -182,7 +193,16 @@ function pinIcon(user, now) {
 
 function popupHtml(user, now) {
   const rows = [`<b>${escapeHtml(displayName(user))}</b>`, timeAgo(user.ts, now)];
-  if (user.acc != null && user.acc > 0) rows.push(`точність ±${Math.round(user.acc)} м`);
+  // Телефон у приміщенні не має GPS-сигналу й надсилає точку за мережею:
+  // вона справжня, але може відрізнятися на сотні метрів. Кажемо про це
+  // прямо, інакше люди вірять маркеру точніше, ніж він того вартий.
+  if (user.acc != null && user.acc > 0) {
+    rows.push(
+      isAccurate(user.acc)
+        ? `точність ±${Math.round(user.acc)} м`
+        : `приблизно, ±${Math.round(user.acc)} м (за сигналом мережі)`,
+    );
+  }
   if (user.bat != null) rows.push(`батарея ${user.bat}%`);
   return `${rows.join('<br>')}<div class="meta">Колір закріплений за цим пристроєм</div>`;
 }
@@ -198,6 +218,10 @@ async function poll() {
     if (!res.ok) throw new Error('http ' + res.status);
     const data = await res.json();
 
+    // Сервер сам каже, через скільки хвилин маркер стає сірим. Раніше мапа
+    // мала власні 2 хвилини й сіріла втричі раніше за обіцянку.
+    if (data.staleAfterMs) state.staleAfterMs = data.staleAfterMs;
+
     state.users.clear();
     for (const u of data.users) state.users.set(u.uid, u);
 
@@ -206,6 +230,7 @@ async function poll() {
 
     // Порожня група — найчастіше це помилка в коді, а не відсутність людей.
     if (data.users.length === 0) setStatus('ok', 'у групі поки нікого немає');
+    else if (data.stale) setStatus('err', 'сервер недоступний — показуємо останні дані');
     else setStatus('ok', `${data.users.length} у групі`);
   } catch {
     setStatus('err', 'немає зв’язку з сервером');
@@ -290,17 +315,13 @@ function renderPeople(now) {
     } else {
       // Людина, що щойно приєдналася, ще не має точки — показуємо це прямо,
       // щоб не здавалося, що вона зникла або не прийшла.
-      // Учасник, який лише пише в чаті, координат не передає — йому не
-      // треба чекати на GPS, бо він і не збирається його ввімкнути.
       // Для свіжих — як раніше. Для старих — абсолютний час, щоб було
       // видно, коли людину бачили востаннє (у туризмі це і є головне).
       const sub = hasFix
         ? isFresh(user.ts, now)
-          ? timeAgo(user.ts, now)
+          ? timeAgo(user.ts, now) + (isAccurate(user.acc ?? 0) ? '' : ' · приблизно')
           : 'був онлайн ' + absoluteWhen(user.ts, now)
-        : user.role === 'chat'
-          ? 'у чаті, без GPS'
-          : 'чекаємо сигнал GPS';
+        : 'чекаємо сигнал GPS';
       row.innerHTML = `
         <div class="avatar ${hasFix && fresh ? 'fresh' : 'stale'}${hasFix ? '' : ' waiting'}" style="background:${userColor(user)}">${escapeHtml(initial(user.name, user.uid))}</div>
         <div class="person-meta">
@@ -319,139 +340,6 @@ function renderPeople(now) {
       selectUser(user.uid);
     };
     list.appendChild(row);
-  }
-}
-
-// --- чат ---
-
-const chatNameKey = 'mayachok-name';
-
-function localUid() {
-  let uid = localStorage.getItem('mayachok-uid');
-  if (!uid) {
-    uid = 'web-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-    localStorage.setItem('mayachok-uid', uid);
-  }
-  return uid;
-}
-
-function clockTime(ts) {
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-/** Реєструє браузер як учасника групи, щоб сервер дозволив писати в чат. */
-async function ensureChatMember() {
-  try {
-    await fetch(`${API}/api/join`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: state.code, uid: localUid(), name: state.chatName, role: 'chat' }),
-    });
-  } catch {
-    // не критично: напишемо й так, сервер перевірить і скаже
-  }
-}
-
-async function pollChat() {
-  if (!state.code) return;
-  try {
-    const res = await fetch(
-      `${API}/api/chat?code=${encodeURIComponent(state.code)}&after=${state.lastMessageId}`,
-      { cache: 'no-store' },
-    );
-    if (!res.ok) return;
-    const data = await res.json();
-    if (!data.messages || data.messages.length === 0) return;
-
-    for (const m of data.messages) {
-      addMessage(m);
-      state.lastMessageId = Math.max(state.lastMessageId, m.id);
-    }
-    if (state.tab !== 'chat') state.unread += data.messages.length;
-    updateChatBadge();
-    scrollChatToEnd();
-  } catch {
-    // чат не критичний — тихо пропускаємо опитування
-  }
-}
-
-function addMessage(m) {
-  const log = $('chat-log');
-  const mine = m.uid === localUid();
-  const row = document.createElement('div');
-  row.className = 'msg' + (mine ? ' mine' : '');
-  row.innerHTML = `
-    <div class="msg-head">
-      <span class="msg-name">${escapeHtml(m.name || 'Хтось')}</span>
-      <span class="msg-time">${clockTime(m.ts)}</span>
-    </div>
-    <div class="msg-body">${escapeHtml(m.body).replace(/\n/g, '<br>')}</div>`;
-  log.appendChild(row);
-}
-
-function scrollChatToEnd() {
-  const log = $('chat-log');
-  log.scrollTop = log.scrollHeight;
-}
-
-function updateChatBadge() {
-  const badge = $('chat-badge');
-  if (state.unread > 0 && state.tab !== 'chat') {
-    badge.textContent = state.unread > 99 ? '99+' : String(state.unread);
-    badge.classList.remove('hidden');
-  } else {
-    badge.classList.add('hidden');
-    state.unread = 0;
-  }
-}
-
-function switchTab(name) {
-  state.tab = name;
-  $('tab-people').classList.toggle('hidden', name !== 'people');
-  $('tab-chat').classList.toggle('hidden', name !== 'chat');
-  document.querySelectorAll('.tab').forEach((t) => {
-    t.classList.toggle('active', t.dataset.tab === name);
-  });
-  if (name === 'chat') {
-    updateChatBadge();
-    scrollChatToEnd();
-  } else {
-    render();
-  }
-  if (map) setTimeout(() => map.invalidateSize(), 50);
-}
-
-async function sendChat(text) {
-  const body = text.trim();
-  if (!body) return;
-  $('chat-input').value = '';
-  await ensureChatMember();
-  try {
-    await fetch(`${API}/api/say`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code: state.code,
-        uid: localUid(),
-        name: state.chatName,
-        body,
-      }),
-    });
-  } catch {
-    $('chat-input').value = body; // повертаємо текст, щоб не загубити
-    flash('не вдалося надіслати');
-  }
-  pollChat();
-}
-
-function openChat() {
-  switchTab('chat');
-  if (state.chatName) {
-    $('chat-input').focus();
-  } else {
-    $('chat-name').value = localStorage.getItem(chatNameKey) || '';
-    openModal('modal-name');
   }
 }
 
@@ -535,31 +423,6 @@ function fitAll() {
   else map.setView([49.84, 24.03], 12);
 }
 
-$('btn-chat').onclick = openChat;
-
-$('chat-name-ok').onclick = () => {
-  const name = $('chat-name').value.trim();
-  if (!name) return;
-  state.chatName = name;
-  localStorage.setItem(chatNameKey, name);
-  closeModal('modal-name');
-  ensureChatMember();
-  $('chat-input').focus();
-};
-
-$('chat-form').addEventListener('submit', (event) => {
-  event.preventDefault();
-  if (!state.chatName) {
-    openChat();
-    return;
-  }
-  sendChat($('chat-input').value);
-});
-
-document.querySelectorAll('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
-});
-
 // --- інтерфейс ---
 
 function setStatus(kind, text) {
@@ -626,26 +489,49 @@ function start() {
   $('gate').classList.add('hidden');
   document.body.classList.add('live');
   poll();
-  mapTimer = setInterval(poll, POLL_MS);
+  armPolling();
 
-  // чат питаємо частіше — повідомлення мають з'являтися одразу
-  pollChat();
-  chatTimer = setInterval(pollChat, CHAT_POLL_MS);
-
-  // Закрили вкладку або сховали її — зупиняємо обидва таймери. Без цього
-  // вкладка «у фоні» робила б ~26 тисяч запитів на добу й не давала
-  // заснути телефону.
+  // Закрили вкладку або сховали її — зупиняємо таймер. Без цього вкладка
+  // «у фоні» робила б тисячі запитів на добу й не давала заснути телефону.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
-      clearInterval(mapTimer);
-      clearInterval(chatTimer);
+      stopPolling();
     } else {
       poll();
-      pollChat();
-      mapTimer = setInterval(poll, POLL_MS);
-      chatTimer = setInterval(pollChat, CHAT_POLL_MS);
+      armPolling();
     }
   });
+}
+
+/**
+ * Опитування з адаптивним інтервалом: поки хтось у групі рухається — 15 секунд,
+ * як і раніше; коли всі точки застаріли (або людей уже не видно) — 60 секунд.
+ *
+ * Навіщо: група часто відкрита просто «переглянути», і в такому разі 15 секунд
+ * не дають нічого, але витрачають радіо, батарею глядача й ліміт запитів D1.
+ * Рух помітний одразу, тож на ньому швидкість лишається.
+ */
+function currentPollMs() {
+  const now = Date.now();
+  const freshMs = state.staleAfterMs || FRESH_MS;
+  for (const user of state.users.values()) {
+    if (user.lat == null) continue;
+    if (now - user.ts < freshMs) return POLL_MS;
+  }
+  return IDLE_POLL_MS;
+}
+
+function armPolling() {
+  stopPolling();
+  mapTimer = setTimeout(function tick() {
+    if (document.hidden) return;
+    poll().finally(armPolling);
+  }, currentPollMs());
+}
+
+function stopPolling() {
+  if (mapTimer) clearTimeout(mapTimer);
+  mapTimer = null;
 }
 
 // --- події ---

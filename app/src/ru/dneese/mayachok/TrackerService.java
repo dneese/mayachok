@@ -16,11 +16,23 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
+import android.os.SystemClock;
+import android.text.format.DateFormat;
 import android.util.Log;
 
+import java.util.Date;
+
 /**
- * Foreground service: слухає GPS і раз на інтервал надсилає координати.
+ * Foreground service: слухає локацію й раз на інтервал надсилає координати.
  * Працює з вимкненим екраном — саме тому це foreground service.
+ *
+ * Три провайдери, а не один:
+ *  - GPS      — точний, але дорогий і не працює в приміщенні;
+ *  - network  — за Wi-Fi/LTE, майже безкоштовний, але приблизний;
+ *  - passive  — безкоштовний взагалі: не будить ні GPS, ні мережу, а просто
+ *               підхоплює фікси, які система вже надіслала для інших застосунків.
+ *
+ * GPS не вмикається постійно: поки телефон стоїть і точка свіжа, GNSS-чіп спить.
  */
 public final class TrackerService extends Service implements LocationListener {
   private static final String TAG = "GpsTracker";
@@ -40,24 +52,53 @@ public final class TrackerService extends Service implements LocationListener {
   // Лежить без руху — дихаємо ще рідше: до раз на півгодини.
   private static final long HEARTBEAT_MAX_MS = 30 * 60 * 1000L;
 
+  // Старість фікса, якій ще можна довіряти. Далі — не надсилаємо нічого:
+  // краще показати «очікуємо GPS», ніж видавати позавчорашню точку за теперішню.
+  private static final long MAX_FIX_AGE_MS = 5 * 60 * 1000L;
+  // Якщо остання точка старша за це — вмикаємо GPS навіть у спокої.
+  private static final long GPS_STALE_MS = 10 * 60 * 1000L;
+  // Точність гірша за цю — GPS не дає нічого корисного, network не гірше.
+  private static final float GPS_WORTH_ACCURACY = 50f;
+  // GPS не перезапитуємо частіше за цей час — інакше просто гріємо чіп.
+  private static final long GPS_RESUME_DELAY_MS = 60 * 1000L;
+
   private LocationManager locationManager;
-  private HandlerThread handlerThread;
-  private Handler handler;
+  // GPS-фікси приходять на gpsThread, таймер.sendNow() — на timerThread.
+  // Різні лоопери навмисно: handler.removeCallbacksAndMessages(null) на таймері
+  // не зносить доставку наступної точки від LocationManager.
+  private HandlerThread gpsThread;
+  private HandlerThread timerThread;
+  private Handler gpsHandler;
+  private Handler timer;
   private Api api;
   private Prefs prefs;
 
   private double lastLat;
   private double lastLon;
   private float lastAcc;
+  private long lastFixAt; // час фікса, а не час його обробки
   private boolean haveFix;
 
   // Остання надіслана точка — щоб не ганяти запити, коли ми стоїмо на місці.
-  private boolean haveSent;
-  private double lastSentLat;
-  private double lastSentLon;
-  private long lastSentAt;
+  // Ці поля пишемо з потоку Api, а читаємо з потоку таймера — тому volatile.
+  private volatile boolean haveSent;
+  private volatile double lastSentLat;
+  private volatile double lastSentLon;
+  private volatile long lastSentAt;
   private long heartbeatMs = HEARTBEAT_MS;
-  private int consecutiveFailures;
+  private volatile int consecutiveFailures;
+
+  // Точка, яку ми вже відправили: заповнюється перед запитом і живе до
+  // його результату. Саме через це ми ніколи не «забуваємо» надіслати точку,
+  // яка впала на мережі.
+  private volatile boolean inFlight;
+
+  private boolean gpsActive;
+  private long gpsOffUntil;
+  private volatile boolean timerRunning;
+
+  private String lastNotificationText = "";
+  private long lastNotificationAt;
 
   @Override
   public void onCreate() {
@@ -65,6 +106,7 @@ public final class TrackerService extends Service implements LocationListener {
     api = new Api(this);
     prefs = new Prefs(this);
     locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+    ensureChannel();
     startInForeground("Очікування сигналу GPS…");
   }
 
@@ -82,53 +124,154 @@ public final class TrackerService extends Service implements LocationListener {
       return START_NOT_STICKY;
     }
 
-    handlerThread = new HandlerThread("gps");
-    handlerThread.start();
-    handler = new Handler(handlerThread.getLooper());
+    // Потоки створюємо один раз. Інакше кожен повторний старт (наприклад,
+    // після видалення дозволу) лишив би старий HandlerThread живим назавжди.
+    if (gpsThread == null) {
+      gpsThread = new HandlerThread("gps");
+      gpsThread.start();
+      gpsHandler = new Handler(gpsThread.getLooper());
 
-    requestUpdates();
-    scheduleNextSend(0);
+      timerThread = new HandlerThread("gps-timer");
+      timerThread.start();
+      timer = new Handler(timerThread.getLooper());
+
+      requestNetworkUpdates();
+      startGpsIfWorth();
+      scheduleNextSend(0);
+    } else if (!timerRunning) {
+      // Сервіс підняли знову (sticky-перезапуск) — таймер уже зупинено,
+      // тож піднімаємо його, не створюючи другого потоку.
+      scheduleNextSend(0);
+    }
     return START_STICKY;
   }
 
-  private void requestUpdates() {
+  /**
+   * Network і passive — завжди. Обидва майже безкоштовні: мережа й так активна,
+   * а passive не будить жодного провайдера. Саме вони врятують у підвалі,
+   * де GPS не бачить жодного супутника.
+   */
+  private void requestNetworkUpdates() {
+    requestUpdatesFor(LocationManager.NETWORK_PROVIDER, prefs.intervalSeconds() * 1000L, 0f);
+    // Passive не має власного таймера: він віддає те, що вже є.
+    requestUpdatesFor(LocationManager.PASSIVE_PROVIDER, 0L, 0f);
+  }
+
+  private void requestUpdatesFor(String provider, long minTime, float minDistance) {
     try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-          && checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
-              != PackageManager.PERMISSION_GRANTED) {
+      if (!hasLocationPermission()) {
         Log.w(TAG, "немає дозволу на геолокацію");
         stopSelf();
         return;
       }
-
-      // minTime дорівнює інтервалу: інакше GPS смикається без пауз і
-      // ми надсилали б точку на кожному оновленні, ігноруючи вибір користувача.
-      long minTime = prefs.intervalSeconds() * 1000L;
-      locationManager.requestLocationUpdates(
-          LocationManager.GPS_PROVIDER, minTime, 0f, this, handlerThread.getLooper());
-
-      // Остання відома позиція — щоб не чекати холодного старту.
-      Location last = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-      if (last != null) onLocationChanged(last);
-
+      locationManager.requestLocationUpdates(provider, minTime, minDistance, this, gpsHandler.getLooper());
+      Log.i(TAG, "слухаю " + provider);
     } catch (SecurityException error) {
-      Log.w(TAG, "відмовлено в доступі: " + error.getMessage());
-      stopSelf();
-    } catch (Exception error) {
-      Log.w(TAG, "помилка GPS: " + error.getMessage());
-      stopSelf();
+      // Окремий провайдер може бути недоступний — тоді решта працює далі.
+      Log.w(TAG, "відмовлено в доступі до " + provider + ": " + error.getMessage());
+    } catch (IllegalArgumentException error) {
+      // Провайдера немає на цьому телефоні. Неpanic — просто без нього.
+      Log.w(TAG, "немає провайдера " + provider);
     }
+  }
+
+  private boolean hasLocationPermission() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+    return checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED;
+  }
+
+  /**
+   * GPS вмикаємо не завжди, а коли він має сенс: ми рухаємось, або свіжої
+   * точки немає, або найкраща з наявних занадто груба.
+   *
+   * Економія тут найбільша: GNSS-чіп у спокої просто спить.
+   */
+  private synchronized void startGpsIfWorth() {
+    if (gpsActive || gpsHandler == null) return;
+    long now = SystemClock.elapsedRealtime();
+    if (now < gpsOffUntil) return;
+
+    double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
+    boolean stale = !haveFix || System.currentTimeMillis() - lastFixAt > GPS_STALE_MS;
+    boolean inaccurate = haveFix && lastAcc > GPS_WORTH_ACCURACY;
+
+    if (!stale && !inaccurate && moved < SEND_MIN_METERS) return;
+
+    requestUpdatesFor(LocationManager.GPS_PROVIDER, prefs.intervalSeconds() * 1000L, 0f);
+    gpsActive = true;
+
+    // Холодний старт GPS може тривати хвилину. Якщо ми зупинимось через
+    // 60 секунд і фікса так і не буде — повернемось пізніше, замість того
+    // щоб розпрягати чіп назавжди.
+    gpsHandler.postDelayed(
+        new Runnable() {
+          @Override
+          public void run() {
+            stopGpsIfIdle();
+          }
+        },
+        GPS_RESUME_DELAY_MS);
+  }
+
+  /** GPS можна вимкнути: ми стоїмо, точка свіжа й достатньо точна. */
+  private synchronized void stopGpsIfIdle() {
+    if (!gpsActive) return;
+    double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
+    boolean stale = !haveFix || System.currentTimeMillis() - lastFixAt > GPS_STALE_MS;
+    boolean inaccurate = haveFix && lastAcc > GPS_WORTH_ACCURACY;
+    if (stale || inaccurate || moved >= SEND_MIN_METERS) return;
+
+    try {
+      locationManager.removeUpdates(this);
+    } catch (Exception ignored) {
+      // провайдера вже немає в системі
+    }
+    // removeUpdates знімає ВСІ реєстрації цього слухача, а не лише GPS.
+    // Тому network і passive доводиться переписати — інакше вони зникли б
+    // разом із GPS і в приміщенні ми знову стали б «мовчазними».
+    requestNetworkUpdates();
+    gpsActive = false;
+    // Не намагаємося одразу: інакше «стою — вмик — вимк» ганяє GNSS без кінця.
+    gpsOffUntil = SystemClock.elapsedRealtime() + GPS_RESUME_DELAY_MS;
+    Log.i(TAG, "GPS вимкнено: стоїмо, точка свіжа");
   }
 
   @Override
   public void onLocationChanged(Location location) {
+    long now = System.currentTimeMillis();
+    // Точка від пасивного провайдера може бути сирою копією чужої фікса.
+    // Вічно «свіжий» час у такій точці змусив би нас думати, що ми рухаємось.
+    if (now - location.getTime() > MAX_FIX_AGE_MS) return;
+
+    String provider = location.getProvider();
+    // Network-фікса зазвичай точніша за дрейф GPS у приміщенні, але програє
+    // справжньому GPS на вулиці. Тому беремо найкраще з наявного.
+    if (haveFix && !isBetterThanCurrent(location)) {
+      // Нічого не змінилось — лише оновлюємо час фікса, щоб freshness рахувався
+      // від свіжої інформації, а не від часу обробки.
+      if (now - lastFixAt > MAX_FIX_AGE_MS) lastFixAt = location.getTime();
+      return;
+    }
+
     lastLat = location.getLatitude();
     lastLon = location.getLongitude();
-    lastAcc = location.getAccuracy();
+    lastAcc = location.hasAccuracy() ? location.getAccuracy() : 9999f;
+    lastFixAt = location.getTime();
     haveFix = true;
-    updateNotification("Остання точка: " + location.getTime() / 1000);
-    // Надсилає не подія, а таймер у sendNow(): інакше разом із таймером
-    // отримали б дві точки за інтервал. Таймер сам бере найсвіжішу позицію.
+
+    updateNotification(notificationText(provider));
+    // Рух ⇒ GPS знову потрібен, щоб точність не відставала.
+    if (provider != null && LocationManager.GPS_PROVIDER.equals(provider)) startGpsIfWorth();
+  }
+
+  /** Чи ця точка краща за ту, що вже маємо. */
+  private boolean isBetterThanCurrent(Location location) {
+    float incoming = location.hasAccuracy() ? location.getAccuracy() : 9999f;
+    // Свіжість важливіша за точність: прострочені дані не мають сенсу.
+    boolean incomingFresher = location.getTime() > lastFixAt + 1000L;
+    if (incomingFresher && incoming < 200f) return true;
+    return incoming + 100f < lastAcc;
   }
 
   @Override
@@ -140,7 +283,7 @@ public final class TrackerService extends Service implements LocationListener {
 
   @Override
   public void onProviderDisabled(String provider) {
-    updateNotification("GPS вимкнено");
+    if (LocationManager.GPS_PROVIDER.equals(provider)) updateNotification("GPS вимкнено");
   }
 
   @Override
@@ -164,17 +307,20 @@ public final class TrackerService extends Service implements LocationListener {
    *
    * GPS безкоштовний, а мобільний інтернет і запис у базу — ні. Тому
    * рішення приймає сам телефон: якщо людина стоїть на місці або повільно
-   * йде, ми не ганяємо запити в порожнечу. На сервер іде одна й та сама
-   * остання точка, тож нічого не втрачається.
+   * йде, ми не ганяємо запити в порожнечу.
    */
   private void sendNow() {
-    if (!haveFix) return;
+    if (inFlight) return; // попередній запит ще в дорозі — не плодимо другий
 
     long now = System.currentTimeMillis();
+    if (!haveFix) {
+      startGpsIfWorth();
+      return;
+    }
+
     double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
 
-    // Лежить нерухомо — розтягуємо «подих» аж до півгодини. Це найбільша
-    // економія: телефон на столі пише 48 разів на добу замість 288.
+    // Лежить нерухомо — розтягуємо «подих» аж до півгодини.
     if (haveSent && moved < STILL_METERS) {
       heartbeatMs = Math.min(heartbeatMs * 2, HEARTBEAT_MAX_MS);
     } else {
@@ -182,27 +328,64 @@ public final class TrackerService extends Service implements LocationListener {
     }
 
     boolean send = !haveSent || moved >= SEND_MIN_METERS || now - lastSentAt >= heartbeatMs;
-    if (!send) return;
+    if (!send) {
+      stopGpsIfIdle();
+      return;
+    }
 
-    lastSentAt = now;
-    lastSentLat = lastLat;
-    lastSentLon = lastLon;
-    haveSent = true;
+    inFlight = true;
+    final double lat = lastLat;
+    final double lon = lastLon;
+    final float acc = lastAcc;
+    final long fixAt = lastFixAt;
 
-    api.send(lastLat, lastLon, lastAcc,
+    api.send(
+        lat,
+        lon,
+        acc,
+        fixAt,
         new Api.Callback() {
           @Override
           public void onResult(String error) {
+            inFlight = false;
             if (error != null) {
+              // Головне тут: точку НЕ вважаємо надісланою. Вона лишається
+              // невідісланою й піде на наступному тіку. Раніше стан
+              // оновлювався до запиту, тож одна обривка мережі замикала
+              // надсилання на півгодини.
               consecutiveFailures++;
+              heartbeatMs = HEARTBEAT_MS;
+              prefs.setLastSendError(error);
               Log.w(TAG, "надсилання не вдалося: " + error);
-            } else {
-              if (consecutiveFailures > 0) Log.i(TAG, "мережа ожила");
-              consecutiveFailures = 0;
-              Log.i(TAG, "точку надіслано");
+              updateNotification("Не вдалося надіслати: " + error);
+              return;
             }
+
+            if (consecutiveFailures > 0) Log.i(TAG, "мережа ожила");
+            consecutiveFailures = 0;
+            prefs.setLastSendError("");
+
+            // Коміт лише після успіху.
+            lastSentAt = System.currentTimeMillis();
+            lastSentLat = lat;
+            lastSentLon = lon;
+            haveSent = true;
+            prefs.setLastSentAt(lastSentAt);
+
+            Log.i(TAG, "точку надіслано");
+            updateNotification(notificationText(LocationManager.GPS_PROVIDER));
+            stopGpsIfIdle();
           }
         });
+  }
+
+  private String notificationText(String provider) {
+    if (!haveFix) return "Очікування сигналу GPS…";
+    String time = DateFormat.getTimeFormat(this).format(new Date(lastFixAt));
+    String quality = lastAcc > 100f ? "приблизна (±" + Math.round(lastAcc) + " м)" : "±" + Math.round(lastAcc) + " м";
+    String source = LocationManager.NETWORK_PROVIDER.equals(provider) ? ", за мережею"
+        : LocationManager.PASSIVE_PROVIDER.equals(provider) ? ", пасивна" : "";
+    return "Остання точка " + time + " · " + quality + source;
   }
 
   /**
@@ -211,9 +394,10 @@ public final class TrackerService extends Service implements LocationListener {
    * Вдалі — повертаємося до звичайного інтервалу.
    */
   private void scheduleNextSend(final long delayMs) {
-    if (handler == null) return;
-    handler.removeCallbacksAndMessages(null);
-    handler.postDelayed(
+    if (timer == null) return;
+    timerRunning = true;
+    timer.removeCallbacksAndMessages(null);
+    timer.postDelayed(
         new Runnable() {
           @Override
           public void run() {
@@ -238,7 +422,20 @@ public final class TrackerService extends Service implements LocationListener {
     return (long) (Math.random() * base * 0.2d);
   }
 
+  private void ensureChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+    NotificationManager manager =
+        (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+    if (manager == null) return;
+    NotificationChannel channel =
+        new NotificationChannel(CHANNEL_ID, "Трекінг GPS", NotificationManager.IMPORTANCE_LOW);
+    channel.setShowBadge(false);
+    channel.setDescription("Показує, що трекер активний");
+    manager.createNotificationChannel(channel);
+  }
+
   private void startInForeground(String text) {
+    lastNotificationText = text;
     Notification notification = buildNotification(text);
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       startForeground(
@@ -250,24 +447,24 @@ public final class TrackerService extends Service implements LocationListener {
     }
   }
 
-  private void updateNotification(String text) {
+  /**
+   * Оновлюємо сповіщення не на кожній точці, а не частіше разу на хвилину
+   * й лише коли текст реально змінився: кожен notify() — це binder-виклик
+   * і пробудження системи, а вигляду це не додає.
+   */
+  private synchronized void updateNotification(String text) {
+    long now = SystemClock.elapsedRealtime();
+    if (text.equals(lastNotificationText)) return;
+    if (now - lastNotificationAt < 60 * 1000L) return;
+    lastNotificationText = text;
+    lastNotificationAt = now;
+
     NotificationManager manager =
         (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
     if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(text));
   }
 
   private Notification buildNotification(String text) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      NotificationManager manager =
-          (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-      NotificationChannel channel =
-          new NotificationChannel(
-              CHANNEL_ID, "Трекінг GPS", NotificationManager.IMPORTANCE_LOW);
-      channel.setShowBadge(false);
-      channel.setDescription("Показує, що трекер активний");
-      if (manager != null) manager.createNotificationChannel(channel);
-    }
-
     Intent open = new Intent(this, MainActivity.class);
     open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
     int flags = PendingIntent.FLAG_UPDATE_CURRENT;
@@ -287,15 +484,20 @@ public final class TrackerService extends Service implements LocationListener {
 
   @Override
   public void onDestroy() {
-    if (handlerThread != null) {
-      if (handler != null) handler.removeCallbacksAndMessages(null);
-      try {
-        locationManager.removeUpdates(this);
-      } catch (Exception ignored) {
-        // сервіс уже відсутній у системі
-      }
-      handlerThread.quitSafely();
+    if (gpsHandler != null) gpsHandler.removeCallbacksAndMessages(null);
+    if (timer != null) timer.removeCallbacksAndMessages(null);
+    if (gpsThread != null) gpsThread.quitSafely();
+    if (timerThread != null) timerThread.quitSafely();
+    try {
+      if (locationManager != null) locationManager.removeUpdates(this);
+    } catch (Exception ignored) {
+      // сервіс уже відсутній у системі
     }
+
+    // Екран показує «Трекер активний» саме за цим прапорцем. Без скидання
+    // убитий процес лишав би зелену крапку при мертвому надсиланні — саме
+    // через це було незрозуміло, надсилає застосунок точки чи ні.
+    prefs.setTracking(false);
     super.onDestroy();
   }
 

@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   gid        TEXT NOT NULL,
   uid        TEXT NOT NULL,
   name       TEXT,
-  role       TEXT NOT NULL DEFAULT 'tracker', -- 'tracker' надсилає GPS, 'chat' — лише пише
+  -- Поле role (було 'tracker' або 'chat') прибране у версії 1.7 разом із чатом:
+  -- учасників, які не передають координати, більше немає.
   last_seen  INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   -- Остання відома точка живе тут, у рядку учасника, а не в окремій
@@ -24,35 +25,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_gid ON users(gid);
 CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen);
 
--- Журнал точок більше НЕ пишеться: телефон надсилає координату тільки коли
--- зрушився, а сервер тримає лише останню. Таблиця лишається лише для
--- одноразового перенесення старих даних і буде видалена окремим запитом.
-CREATE TABLE IF NOT EXISTS points (
-  id  INTEGER PRIMARY KEY AUTOINCREMENT,
-  uid TEXT NOT NULL,
-  gid TEXT NOT NULL,
-  lat REAL NOT NULL,
-  lon REAL NOT NULL,
-  acc REAL,
-  bat INTEGER,
-  ts  INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_points_uid_ts ON points(uid, ts);
-CREATE INDEX IF NOT EXISTS idx_points_gid_ts ON points(gid, ts);
+-- Таблиця points більше не ведеться й прибрана міграцією 1.7:
+-- телефон надсилає координату тільки коли зрушився, а сервер тримає лише останню.
 
 CREATE TABLE IF NOT EXISTS groups (
   gid        TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL
 );
-
--- Чат групи. Лише текст, без файлів. Тиждень історії (видаляється у cleanup).
-CREATE TABLE IF NOT EXISTS messages (
-  id    INTEGER PRIMARY KEY AUTOINCREMENT,
-  gid   TEXT NOT NULL,
-  uid   TEXT NOT NULL,
-  name  TEXT,
-  body  TEXT NOT NULL,
-  ts    INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_messages_gid_id ON messages(gid, id);
-CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);

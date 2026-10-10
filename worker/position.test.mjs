@@ -1,10 +1,16 @@
 // Тест Worker: остання точка живе в рядку учасника, журнал не росте,
-// маркер не зникає, кеш працює, рейт-ліміт тримає базу.
+// маркер не зникає, кеш працює, рейт-ліміт тримає базу, а аварійна
+// відповідь не змішує групи між собою.
 import worker from './src/index.js';
 
 const users = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const T = 1750000000000;
+
+// Лічильник запитів до бази: щоб перевірити, що точка пишеться ОДНИМ
+// проходом, а не трьома, як раніше.
+let queries = 0;
+let failNext = 0;
 
 const db = {
   prepare(sql) {
@@ -12,18 +18,34 @@ const db = {
     const api = {
       bind: (...a) => { args = a; return api; },
       run: async () => {
-        if (/INSERT INTO points/.test(sql)) return { success: true, meta: { changes: 1 } };
+        queries++;
+        if (failNext > 0) { failNext--; throw new Error('D1 недоступний'); }
+
+        // Точка: один UPSERT із координатами прямо в рядок учасника.
+        if (/INSERT INTO users/.test(sql) && /point_ts\)\s*VALUES/i.test(sql)) {
+          const f = users.find((u) => u.gid === args[0] && u.uid === args[1]);
+          if (f) {
+            f.last_seen = args[3];
+            if (args[2]) f.name = args[2];
+            f.lat = args[4]; f.lon = args[5]; f.acc = args[6]; f.bat = args[7]; f.point_ts = args[8];
+          } else {
+            users.push({
+              gid: args[0], uid: args[1], name: args[2],
+              last_seen: args[3], created_at: args[3],
+              lat: args[4], lon: args[5], acc: args[6], bat: args[7], point_ts: args[8],
+            });
+          }
+          return { success: true, meta: { changes: 1 } };
+        }
+
+        // Реєстрація в групі: UPSERT без координат.
         if (/INSERT INTO users/.test(sql)) {
           const f = users.find((u) => u.gid === args[0] && u.uid === args[1]);
-          if (f) { f.last_seen = args[4]; if (args[2]) f.name = args[2]; }
-          else users.push({ gid: args[0], uid: args[1], name: args[2], role: args[3], last_seen: args[4], created_at: args[4] });
+          if (f) { f.last_seen = args[3]; if (args[2]) f.name = args[2]; }
+          else users.push({ gid: args[0], uid: args[1], name: args[2], last_seen: args[3], created_at: args[3] });
           return { success: true, meta: { changes: 1 } };
         }
-        if (/UPDATE users SET lat/.test(sql)) {
-          const f = users.find((u) => u.gid === args[0] && u.uid === args[1]);
-          if (f) { f.lat = args[2]; f.lon = args[3]; f.acc = args[4]; f.bat = args[5]; f.point_ts = args[6]; }
-          return { success: true, meta: { changes: 1 } };
-        }
+
         if (/DELETE FROM users/.test(sql)) {
           const i = users.findIndex((u) => u.gid === args[0] && u.uid === args[1]);
           if (i >= 0) users.splice(i, 1);
@@ -32,6 +54,8 @@ const db = {
         return { success: true, meta: { changes: 0 } };
       },
       first: async () => {
+        queries++;
+        if (failNext > 0) { failNext--; throw new Error('D1 недоступний'); }
         if (/SELECT last_seen FROM users/.test(sql)) {
           const f = users.find((u) => u.gid === args[0] && u.uid === args[1]);
           return f ? { last_seen: f.last_seen } : null;
@@ -44,6 +68,8 @@ const db = {
         return null;
       },
       all: async () => {
+        queries++;
+        if (failNext > 0) { failNext--; throw new Error('D1 недоступний'); }
         if (/FROM users/.test(sql)) {
           return { results: users.filter((u) => u.gid === args[0]).map((u) => ({ ...u, ts: u.point_ts })) };
         }
@@ -68,23 +94,46 @@ const group = async (code) =>
   (await worker.fetch(new Request(`https://x/api/group?code=${code}`), env)).json();
 
 console.log('запис позиції:');
-check('точка прийнята', (await ingest('code0001a', 'dev1', 49.84, 24.03, T)).ok, true);
-check('позиція лежить у рядку учасника', users.find((u) => u.uid === 'dev1').lat, 49.84);
+await ingest('code0001a', 'dev1', 49.84, 24.03, T);
+check('точка прийнята', users.find((u) => u.uid === 'dev1').lat, 49.84);
 check('час точки записано', users.find((u) => u.uid === 'dev1').point_ts, T);
+
+// Головне про базу: раніше на одну точку йшли чотири походи
+// (upsert → SELECT last_seen → INSERT/UPDATE → SELECT name → UPDATE coords).
+// Ліміт D1 спільний на всі запити, тож кожен зайвий прохід — це гроші.
+// Тепер точку пише один UPSERT.
+// Рахуємо на першій точці нового uid: повторний ingest того ж uid
+// відсікає рейт-ліміт (8 секунд реального часу), тож лічильник був би 0.
+queries = 0;
+await ingest('code0001a', 'fresh1', 49.841, 24.031, T + 60_000);
+check('точка пишеться трьома проходами, а не п\'ятьма', queries, 3);
+check('координата записана', users.find((u) => u.uid === 'fresh1').lat, 49.841);
+
 // Друга людина: рейт-ліміт рахує реальний час, а тест усі запити робить
 // за мілісекунди. Тому перевіряємо перезапис на іншому uid.
 await ingest('code0001a', 'dev2', 49.85, 24.04, T + 60_000);
 check('наступна точка перезаписала попередню (журналу немає)', users.find((u) => u.uid === 'dev2').lat, 49.85);
 check('у базі один рядок на людину', users.filter((u) => u.uid === 'dev2').length, 1);
 
+console.log('роль прибрана разом із чатом:');
+const joined = await (await worker.fetch(new Request(
+  'https://x/api/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: 'code0001a', uid: 'joiner', name: 'Тест', role: 'chat' }),
+  }), env)).json();
+check('join без поля role у відповіді', joined.role, undefined);
+check('у рядку учасника немає role', 'role' in users.find((u) => u.uid === 'joiner'), false);
+const gRole = await group('code0001a');
+check('і в відповіді мапи її теж немає', 'role' in gRole.users[0], false);
+
 console.log('кеш існує (5 секунд) і не ламає відповідь:');
 const g1 = await group('code0001a');
 check('у відповіді є список людей', Array.isArray(g1.users), true);
 check('координата доїхала до мапи', g1.users.find((u) => u.uid === 'dev2').lat, 49.85);
-check('у групі двоє людей', g1.users.length, 2);
 const g1b = await group('code0001a');
 check('другий запит (з кешу) дав те саме', g1b.users.find((u) => u.uid === 'dev2').lat, 49.85);
-check('кеш не обрізає відповідь', g1b.users.length, 2);
+check('кеш не обрізає відповідь', g1b.users.length, users.filter((u) => u.gid === g1.users[0].gid).length);
 
 console.log('стара людина не зникає:');
 const old = T - 40 * 3600 * 1000;
@@ -99,12 +148,33 @@ const fast = async (lat, t) => (await ingest('code0003c', 'spammer', lat, 24.0, 
 check('перша точка проходить', await fast(49.80, T), false);
 check('друга за мить відхилена', await fast(49.81, T + 500), true);
 check('і третя теж', await fast(49.82, T + 1000), true);
-// відхилені точки не мають змінювати навіть те, що вже є
 check('у базу не потрапило нічого зайвого', users.find((u) => u.uid === 'spammer').lat, 49.80);
 await sleep(8200); // межа 8 секунд реального часу
 check('через 8 секунд знову приймає', await fast(49.90, T + 9000), false);
 check('і позиція оновилась', users.find((u) => u.uid === 'spammer').lat, 49.90);
 check('рядок так і один на людину', users.filter((u) => u.uid === 'spammer').length, 1);
+
+console.log('падіння бази не змішує групи:');
+// Наповнюємо аварійні копії для двох різних груп. Кеш живе 5 секунд,
+// тож до перевірки даємо йому протухнути — інакше ми ніколи не дістанемось
+// до бази, а отримаємо звичайний кешований варіант.
+await group('code0002b');
+await group('code0003c');
+const okA = await group('code0002b');
+const okC = await group('code0003c');
+// Кеш живе 5 секунд і щойно оновлювався вище — чекаємо, поки протухне,
+// інакше ми ніколи не дістанемось до бази, а отримаємо звичайний кеш.
+await sleep(5200);
+// Тепер база падає — і ми мусимо отримати дані СВОЄЇ групи, а не чужі.
+failNext = 1;
+const staleA = await group('code0002b');
+failNext = 1;
+const staleC = await group('code0003c');
+failNext = 0;
+check('група A при падінні бази отримує своє', staleA.stale, true);
+check('і це справді група A, а не B', staleA.users[0].uid, okA.users[0].uid);
+check('група C отримує своє', staleC.users[0].uid, okC.users[0].uid);
+check('і групи не змішалися', staleA.users[0].uid !== staleC.users[0].uid, true);
 
 console.log('вихід із групи:');
 const lv = await (await worker.fetch(new Request('https://x/api/leave?code=code0002b&uid=lost1'), env)).json();

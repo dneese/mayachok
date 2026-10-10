@@ -18,9 +18,6 @@ const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
 // щохвилини після 15, хоча ми точно знаємо, де вона.
 const FRESH_MINUTES = 30;
 const MAX_NAME_LEN = 24;
-const MAX_BODY_LEN = 500; // довжина одного повідомлення
-const CHAT_RETENTION_DAYS = 7; // стільки тримаємо переписку
-const MAX_CHAT_PAGE = 100;
 
 // Алфавіт без i, l, o, u — щоб не плутати при диктуванні телефоном.
 // 12 символів × 5 біт = 60 біт: перебір неможливий, а набирається легко.
@@ -53,7 +50,11 @@ function normalizeCode(code) {
  * все одно показує останні відомі дані, а не порожню карту.
  */
 const groupCache = new Map();   // gid -> { at, body }
-let lastGoodBody = null;        // що показати, коли база недоступна
+// Аварійна копія відповіді — по gid, а не одна на всіх.
+// Раніше це був один lastGoodBody на інстанс, тож при падінні D1 група A
+// отримувала дані групи B (і бачила чужі точки). Тепер кожна група має
+// власну останню вдалу відповідь.
+const lastGood = new Map();     // gid -> body
 const GROUP_CACHE_MS = 5000;
 
 /**
@@ -182,20 +183,17 @@ async function handleJoin(request, db) {
   const name = sanitizeName(params.get('name'));
   if (!name) return bad('name required');
 
-  // 'chat' — учасник, який лише пише з браузера і не передає координати.
-  const role = params.get('role') === 'chat' ? 'chat' : 'tracker';
-
-  const member = await upsertUser(db, gid, uid, name, role);
+  const member = await upsertUser(db, gid, uid, name);
   const user = await db
-    .prepare('SELECT name, role FROM users WHERE gid = ?1 AND uid = ?2')
+    .prepare('SELECT name FROM users WHERE gid = ?1 AND uid = ?2')
     .bind(gid, member)
     .first();
   if (!user) return json({ error: 'not found' }, 404);
 
-  return json({ ok: true, uid: member, name: user.name, role: user.role, gid });
+  return json({ ok: true, uid: member, name: user.name, gid });
 }
 
-async function upsertUser(db, gid, uid, name, role) {
+async function upsertUser(db, gid, uid, name) {
   const now = Date.now();
   if (uid) {
     // Існуючого користувача оновлюємо не частіше ніж раз на LAST_SEEN_THROTTLE_MS.
@@ -219,16 +217,17 @@ async function upsertUser(db, gid, uid, name, role) {
     // при надсиланні точок без нього.
     const res = await db
       .prepare(
-        `INSERT INTO users (gid, uid, name, role, last_seen, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+        `INSERT INTO users (gid, uid, name, last_seen, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?4)
          ON CONFLICT(gid, uid) DO UPDATE SET
-           last_seen = ?5,
+           last_seen = ?4,
            name = COALESCE(?3, users.name)`,
       )
-      .bind(gid, uid, cleanName || null, role || 'tracker', now)
+      .bind(gid, uid, cleanName || null, now)
       .run();
     if (res.success) return uid;
   }
+  // Без uid (старий скрипт) — беремо першого учасника групи, як і раніше.
   const found = await db.prepare('SELECT uid FROM users WHERE gid = ?1 ORDER BY created_at LIMIT 1').bind(gid).first();
   if (found && found.uid) return found.uid;
   return crypto.randomUUID();
@@ -237,67 +236,6 @@ async function upsertUser(db, gid, uid, name, role) {
 function sanitizeName(name) {
   if (typeof name !== 'string') return '';
   return name.replace(/[\p{C}]/gu, '').trim().slice(0, MAX_NAME_LEN);
-}
-
-/** Текст повідомлення: прибираємо керуючі символи, зберігаємо переноси рядків. */
-function sanitizeBody(body) {
-  if (typeof body !== 'string') return '';
-  return body
-    .replace(/[\p{Cc}\p{Cf}]/gu, (c) => (c === '\n' ? '\n' : ''))
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-    .slice(0, MAX_BODY_LEN);
-}
-
-async function handleSay(request, db) {
-  const params = await readParams(request);
-  const gid = await groupIdFor(params.get('code'));
-  if (!gid) return bad('invalid code');
-
-  const uid = params.get('uid');
-  if (!uid) return bad('uid required');
-
-  const body = sanitizeBody(params.get('body'));
-  if (!body) return bad('empty message');
-
-  const name = sanitizeName(params.get('name')) || 'Хтось';
-  const now = Date.now();
-
-  // Людина має бути в групі: чат не приймає повідомлення від сторонніх.
-  const member = await db
-    .prepare('SELECT uid FROM users WHERE gid = ?1 AND uid = ?2')
-    .bind(gid, uid)
-    .first();
-  if (!member) return bad('join the group first');
-
-  const res = await db
-    .prepare('INSERT INTO messages (gid, uid, name, body, ts) VALUES (?1, ?2, ?3, ?4, ?5)')
-    .bind(gid, uid, name, body, now)
-    .run();
-
-  return json({ ok: true, id: res.meta ? res.meta.last_row_id : null, name, ts: now });
-}
-
-async function handleChat(request, db) {
-  const params = await readParams(request);
-  const gid = await groupIdFor(params.get('code'));
-  if (!gid) return bad('invalid code');
-
-  // after — останній прочитаний id: віддаємо лише нові повідомлення.
-  const after = Number(params.get('after')) || 0;
-  const limit = Math.min(Math.max(Number(params.get('limit')) || MAX_CHAT_PAGE, 1), MAX_CHAT_PAGE);
-
-  const { results } = await db
-    .prepare(
-      `SELECT id, uid, name, body, ts FROM messages
-       WHERE gid = ?1 AND id > ?2
-       ORDER BY id ASC
-       LIMIT ?3`,
-    )
-    .bind(gid, after, limit)
-    .all();
-
-  return json({ ok: true, now: Date.now(), messages: results });
 }
 
 async function handleCreate(db) {
@@ -336,30 +274,46 @@ async function handleIngest(request, db) {
   }
 
   const uid = await upsertUser(db, gid, requested, params.get('name'));
-  const user = await db.prepare('SELECT name FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).first();
 
   // Остання точка пишеться в рядок учасника, а не в журнал. Так база не
   // росте від часу: одна людина = один рядок назавжди, а не 2880 на добу.
-  // Телефон надсилає точку лише тоді, коли зрушився (див. TrackerService),
-  // тож «підлога» і «не пишемо, бо стоїть» тут навіть не потрібні.
-  await db
+  // Телефон надсилає точку лише тоді, коли зрушився (див. TrackerService).
+  //
+  // Раніше тут було три походи: upsertUser, SELECT name, UPDATE coords.
+  // Тепер все це — один UPSERT. Менше і записів, і прочитаних рядків, а
+  // ліміт D1 (100k writes / 5M reads на добу) спільний на всі запити.
+  const res = await db
     .prepare(
-      `UPDATE users SET lat = ?3, lon = ?4, acc = ?5, bat = ?6, point_ts = ?7
-       WHERE gid = ?1 AND uid = ?2`,
+      `INSERT INTO users (gid, uid, name, last_seen, created_at, lat, lon, acc, bat, point_ts)
+       VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9)
+       ON CONFLICT(gid, uid) DO UPDATE SET
+         last_seen  = ?4,
+         name       = COALESCE(?3, users.name),
+         lat        = ?5,
+         lon        = ?6,
+         acc        = ?7,
+         bat        = ?8,
+         point_ts   = ?9`,
     )
-    .bind(gid, uid, Number(lat), Number(lon), acc, bat, ts)
+    .bind(
+      gid,
+      uid,
+      sanitizeName(params.get('name')) || null,
+      Date.now(),
+      Number(lat),
+      Number(lon),
+      acc,
+      bat,
+      ts,
+    )
     .run();
 
-  markWrite(uid);
+  if (res.success) markWrite(uid);
   meters.writes++;
-  return json({ ok: true, uid, name: user ? user.name : null, ts });
+  return json({ ok: true, uid, ts });
 }
 
-async function handleGroup(request, db) {
-  const params = await readParams(request);
-  const gid = await groupIdFor(params.get('code'));
-  if (!gid) return bad('invalid code');
-
+async function handleGroup(db, gid) {
   // Свіжий кеш — віддаємо одразу, базу не чіпаємо.
   const hit = cacheGet(gid);
   if (hit) {
@@ -375,7 +329,7 @@ async function handleGroup(request, db) {
       // Один прохід по таблиці учасників. Раніше позиція бралася п'ятьма
       // підзапитами на кожну людину — на 30 людях у групі це 150 рядків
       // прочитаних за один опитування мапи.
-      `SELECT uid, name, role, last_seen, lat, lon, acc, bat, point_ts AS ts
+      `SELECT uid, name, last_seen, lat, lon, acc, bat, point_ts AS ts
        FROM users
        WHERE gid = ?1
        ORDER BY created_at`,
@@ -396,7 +350,13 @@ async function handleGroup(request, db) {
   };
 
   cachePut(gid, body);
-  lastGoodBody = body;
+  lastGood.set(gid, body);
+  // Аварійні копії не повинні рости безмежно: група, яку ніхто не дивиться,
+  // нам не потрібна і після падіння D1.
+  if (lastGood.size > 200) {
+    const oldest = lastGood.keys().next();
+    if (!oldest.done) lastGood.delete(oldest.value);
+  }
   return json(body);
 }
 
@@ -412,16 +372,15 @@ async function handleLeave(request, db) {
   const uid = params.get('uid');
   if (!uid) return bad('uid required');
 
-  const points = await db.prepare('DELETE FROM points WHERE gid = ?1 AND uid = ?2').bind(gid, uid).run();
   const user = await db.prepare('DELETE FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).run();
 
   // Кеш скидаємо: людина вийшла — її не має бути на карті навіть на секунду.
   groupCache.delete(gid);
+  lastGood.delete(gid);
 
   return json({
     ok: true,
     uid,
-    deletedPoints: (points.meta && points.meta.changes) || 0,
     deletedUser: (user.meta && user.meta.changes) || 0,
   });
 }
@@ -462,17 +421,11 @@ async function handleHealth(db) {
 async function cleanup(db) {
   const usersCutoff = Date.now() - MEMBER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const groupsCutoff = Date.now() - GROUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  const chatCutoff = Date.now() - CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-  const a = { meta: { changes: 0 } }; // журнал точок більше не ведеться
   const b = await db.prepare('DELETE FROM users WHERE last_seen < ?1').bind(usersCutoff).run();
   const c = await db.prepare('DELETE FROM groups WHERE created_at < ?1').bind(groupsCutoff).run();
-  const d = await db.prepare('DELETE FROM messages WHERE ts < ?1').bind(chatCutoff).run();
-  // Повідомлення щезалишаються в пам'яті після видалення рядка.
   return {
-    deletedPoints: (a.meta && a.meta.changes) || 0,
     deletedUsers: (b.meta && b.meta.changes) || 0,
     deletedGroups: (c.meta && c.meta.changes) || 0,
-    deletedMessages: (d.meta && d.meta.changes) || 0,
   };
 }
 
@@ -502,16 +455,22 @@ export default {
       if (path === '/api/join') return await handleJoin(request, db);
       if (path === '/api/ingest') return await handleIngest(request, db);
       if (path === '/api/group') {
+        // gid рахуємо тут, бо аварійна відповідь нижче шукається саме по ньому.
+        // Раніше тут був спільний lastGoodBody на всі групи, тому змінна й не
+        // потрібна була — але й чужі точки могли потрапити в чужу карту.
+        const gid = await groupIdFor(url.searchParams.get('code'));
+        if (!gid) return bad('invalid code');
         try {
-          return await handleGroup(request, db);
+          return await handleGroup(db, gid);
         } catch (error) {
           // D1 недоступний або вичерпав денний ліміт: тоді падають усі
           // запити, і без цієї гілки карта стала б порожньою в усіх.
           // Краще показати дані, яким трохи застаріли, ніж порожнечу.
           meters.dbErrors++;
-          if (lastGoodBody) {
+          const good = lastGood.get(gid);
+          if (good) {
             const stale = json({
-              ...lastGoodBody,
+              ...good,
               stale: true,
               staleReason: 'database unavailable',
             });
@@ -523,8 +482,6 @@ export default {
       }
       if (path === '/api/rename') return await handleRename(request, db);
       if (path === '/api/leave') return await handleLeave(request, db);
-      if (path === '/api/say') return await handleSay(request, db);
-      if (path === '/api/chat') return await handleChat(request, db);
       if (path === '/api/health') return await handleHealth(db);
 
       // Сумісність зі старим gps.php: ?lat=&lon=&t=
@@ -541,8 +498,6 @@ export default {
             '/api/group',
             '/api/rename',
             '/api/leave',
-            '/api/say',
-            '/api/chat',
             '/api/health',
           ],
         },

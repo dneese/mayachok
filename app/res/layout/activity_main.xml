@@ -200,14 +200,6 @@
                             android:layout_weight="1"
                             android:text="@string/btn_map" />
 
-                        <Button
-                            android:id="@+id/chat"
-                            style="@style/Btn.Secondary"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="8dp"
-                            android:layout_weight="1"
-                            android:text="@string/btn_chat" />
                     </LinearLayout>
 
                     <Button
@@ -242,37 +234,6 @@
                     style="@style/Btn"
                     android:layout_marginTop="12dp"
                     android:text="@string/btn_start" />
-            </LinearLayout>
-
-            <!-- Сповіщення чату: окремий перемикач, бо це фонова робота -->
-            <LinearLayout
-                style="@style/Card"
-                android:layout_marginBottom="12dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        style="@style/CardTitle"
-                        android:text="@string/label_chat_alerts" />
-
-                    <TextView
-                        style="@style/Hint"
-                        android:text="@string/hint_chat_alerts" />
-                </LinearLayout>
-
-                <CheckBox
-                    android:id="@+id/chat_alerts"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:contentDescription="@string/label_chat_alerts"
-                    android:minWidth="48dp" />
             </LinearLayout>
 
             <!-- Довідка -->
@@ -324,100 +285,6 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:overScrollMode="never" />
-    </LinearLayout>
-
-    <!-- Екран чату -->
-    <LinearLayout
-        android:id="@+id/chat_panel"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_marginTop="?android:attr/actionBarSize"
-        android:layout_marginBottom="56dp"
-        android:orientation="vertical"
-        android:visibility="gone">
-
-        <!-- Область повідомлень: шпалера + порожній стан, накладений по центру.
-             Раніше chat_empty стояв після ScrollView, тож при weight=1 його
-             виштовхувало за межі екрана і підказку не було видно ніколи. -->
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_chat_wallpaper">
-
-            <ScrollView
-                android:id="@+id/chat_log"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:overScrollMode="never"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp"
-                android:scrollbars="none">
-
-                <LinearLayout
-                    android:id="@+id/chat_list"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:paddingStart="10dp"
-                    android:paddingEnd="10dp" />
-            </ScrollView>
-
-            <TextView
-                android:id="@+id/chat_empty"
-                style="@style/Hint"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:gravity="center"
-                android:paddingStart="32dp"
-                android:paddingEnd="32dp"
-                android:text="@string/chat_empty" />
-        </FrameLayout>
-
-        <!-- Поле вводу й кругла кнопка надсилення, як у Telegram -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@color/surface"
-            android:elevation="3dp"
-            android:gravity="bottom"
-            android:orientation="horizontal"
-            android:paddingStart="10dp"
-            android:paddingTop="8dp"
-            android:paddingEnd="10dp"
-            android:paddingBottom="8dp">
-
-            <EditText
-                android:id="@+id/chat_input"
-                style="@style/Field"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:layout_marginTop="0dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_chat_input"
-                android:hint="@string/chat_hint"
-                android:importantForAutofill="no"
-                android:inputType="textMultiLine|textCapSentences"
-                android:maxLength="500"
-                android:maxLines="4"
-                android:minHeight="44dp"
-                android:paddingStart="14dp"
-                android:paddingTop="10dp"
-                android:paddingEnd="14dp"
-                android:paddingBottom="10dp" />
-
-            <ImageButton
-                android:id="@+id/chat_send"
-                android:layout_width="46dp"
-                android:layout_height="46dp"
-                android:background="@drawable/bg_send_button"
-                android:contentDescription="@string/chat_send"
-                android:padding="12dp"
-                android:scaleType="fitCenter"
-                android:src="@drawable/ic_send" />
-        </LinearLayout>
     </LinearLayout>
 
     <!-- Нижнє меню -->
@@ -487,31 +354,5 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <LinearLayout
-            android:id="@+id/tab_chat"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="@drawable/bg_tab"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingTop="4dp">
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_tab_chat" />
-
-            <TextView
-                android:id="@+id/tab_chat_text"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="@string/tab_chat"
-                android:textColor="@color/text"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
     </LinearLayout>
 </FrameLayout>

@@ -1,6 +1,8 @@
 package ru.dneese.mayachok;
 
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.os.BatteryManager;
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -11,10 +13,18 @@ import java.net.URLEncoder;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Надсилає одну точку на Worker. Усе йде у фоновому потоці. */
+/** Надсилає точки на Worker. Усе йде у фоновому потоці. */
 public final class Api {
   private final Context context;
+  // Окремі черги для точок і для всього іншого. Спільна черга означала, що
+  // зависла чатова перевірка (а таймаут у неї 10 с) відсувала надсилання
+  // точки — тобто карпалась стрілка на мапі через чат.
   private final ExecutorService pool = Executors.newSingleThreadExecutor();
+  private final ExecutorService points = Executors.newSingleThreadExecutor();
+
+  // 10 секунд на помилку — це довго: телефон кілька разів на добу «чекає» мережу
+  // даремно, і точка зміщується на інтервал. 5 секунд — компроміс.
+  private static final int TIMEOUT_MS = 5000;
 
   public Api(Context context) {
     this.context = context.getApplicationContext();
@@ -30,180 +40,25 @@ public final class Api {
     void onResult(String error);
   }
 
-  /** Одне повідомлення чату. */
-  public static final class Message {
-    public final long id;
-    public final String uid;
-    public final String name;
-    public final String body;
-    public final long ts;
-
-    Message(long id, String uid, String name, String body, long ts) {
-      this.id = id;
-      this.uid = uid;
-      this.name = name;
-      this.body = body;
-      this.ts = ts;
-    }
-  }
-
-  /** Усі нові повідомлення після afterId (0 — усі). */
-  public interface ChatCallback {
-    void onResult(java.util.List<Message> messages, String error);
-  }
-
-  public interface SayCallback {
-    void onResult(String error);
-  }
-
   /**
-   * Читає чат групи. Запит без фільтра повертає лише те, що новіше за afterId,
-   * тож миттєвий стан «прочитано все» вкладається у одне число.
+   * Чиста перевірка мережі перед запитом.
+   *
+   * Навіщо окремо, якщо запит і так упаде: так ми не б'ємося в зачинені двері
+   * й одразу кажемо «немає мережі», замість чекати на таймаут. Плюс це
+   * дозволяє відрізнити «телефон без мережі» від «сервер недоступний».
    */
-  public void chat(final String code, final long afterId, final ChatCallback callback) {
-    pool.execute(
-        new Runnable() {
-          @Override
-          public void run() {
-            HttpURLConnection connection = null;
-            try {
-              String url =
-                  new Prefs(context).api()
-                      + "/api/chat?code="
-                      + URLEncoder.encode(code, "UTF-8")
-                      + "&after="
-                      + afterId;
-              connection = open(url);
-              if (connection.getResponseCode() != 200) {
-                callback.onResult(null, "чат недоступний");
-                return;
-              }
-                callback.onResult(parseChat(read(connection.getInputStream())), null);
-            } catch (Exception error) {
-              callback.onResult(null, "немає зв’язку");
-            } finally {
-              if (connection != null) connection.disconnect();
-            }
-          }
-        });
-  }
-
-  /** Надсилає одне повідомлення від імені цього телефону. */
-  public void say(final String code, final String body, final SayCallback callback) {
-    pool.execute(
-        new Runnable() {
-          @Override
-          public void run() {
-            HttpURLConnection connection = null;
-            try {
-              Prefs prefs = new Prefs(context);
-              String payload =
-                  "{\"code\":"
-                      + jsonString(code)
-                      + ",\"uid\":"
-                      + jsonString(prefs.uid())
-                      + ",\"name\":"
-                      + jsonString(prefs.name())
-                      + ",\"body\":"
-                      + jsonString(body)
-                      + "}";
-              connection = openJson("/api/say", payload);
-              int status = connection.getResponseCode();
-              if (status == 200) {
-                callback.onResult(null);
-              } else {
-                callback.onResult(parseError(connection) + " (чат)");
-              }
-            } catch (Exception error) {
-              callback.onResult("не вдалося надіслати");
-            } finally {
-              if (connection != null) connection.disconnect();
-            }
-          }
-        });
-  }
-
-  /** Мінімальний розбір JSON масиву messages — без сторонніх бібліотек. */
-  private static java.util.List<Message> parseChat(String json) {
-    java.util.List<Message> out = new java.util.ArrayList<Message>();
-    if (json == null) return out;
-    int at = json.indexOf("\"messages\"");
-    if (at < 0) return out;
-    int from = json.indexOf('[', at);
-    int to = json.lastIndexOf(']');
-    if (from < 0 || to <= from) return out;
-
-    int i = from + 1;
-    while (i < to) {
-      int objStart = json.indexOf('{', i);
-      if (objStart < 0 || objStart > to) break;
-      int objEnd = json.indexOf('}', objStart);
-      if (objEnd < 0) break;
-      String item = json.substring(objStart, objEnd + 1);
-      out.add(
-          new Message(
-              longField(item, "id"),
-              textField(item, "uid"),
-              textField(item, "name"),
-              textField(item, "body"),
-              longField(item, "ts")));
-      i = objEnd + 1;
-    }
-    return out;
-  }
-
-  private static long longField(String json, String key) {
-    String marker = "\"" + key + "\":";
-    int at = json.indexOf(marker);
-    if (at < 0) return 0;
-    int i = at + marker.length();
-    int end = i;
-    while (end < json.length() && "0123456789-".indexOf(json.charAt(end)) >= 0) end++;
+  public static boolean online(Context context) {
     try {
-      return end > i ? Long.parseLong(json.substring(i, end)) : 0;
-    } catch (NumberFormatException error) {
-      return 0;
+      ConnectivityManager manager =
+          (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+      if (manager == null) return true; // не знаємо — не блокуємо
+      NetworkInfo info = manager.getActiveNetworkInfo();
+      return info != null && info.isConnected();
+    } catch (Exception error) {
+      return true;
     }
   }
 
-  /** Читає рядкове поле, знімаючи лапки та екрановані символи. */
-  private static String textField(String json, String key) {
-    String marker = "\"" + key + "\":\"";
-    int at = json.indexOf(marker);
-    if (at < 0) return "";
-    int i = at + marker.length();
-    StringBuilder out = new StringBuilder();
-    while (i < json.length()) {
-      char c = json.charAt(i);
-      if (c == '\\' && i + 1 < json.length()) {
-        char next = json.charAt(i + 1);
-        if (next == 'n') out.append('\n');
-        else if (next == 't') out.append('\t');
-        else if (next == 'r') out.append('\r');
-        else if (next == 'u' && i + 5 < json.length()) {
-          try {
-            out.append((char) Integer.parseInt(json.substring(i + 2, i + 6), 16));
-          } catch (NumberFormatException error) {
-            out.append(next);
-          }
-          i += 6;
-          continue;
-        } else out.append(next);
-        i += 2;
-        continue;
-      }
-      if (c == '"') break;
-      out.append(c);
-      i++;
-    }
-    return out.toString();
-  }
-
-  /**
-   * Повідомляє серверу, що цей телефон тепер у групі.
-   * Роботи це до першої GPS-точки: людина одразу з'являється на мапі
-   * як «чекаємо сигнал», а не лише через півхвилини.
-   */
   /**
    * Вихід із групи на сервері. Без цього людина «вийшла б» лише у себе на
    * екрані, а її остання точка лишалася б у базі — усі в групі бачили б,
@@ -260,8 +115,8 @@ public final class Api {
       connection = (HttpURLConnection) url.openConnection();
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
-      connection.setConnectTimeout(10000);
-      connection.setReadTimeout(10000);
+      connection.setConnectTimeout(TIMEOUT_MS);
+      connection.setReadTimeout(TIMEOUT_MS);
       connection.setRequestProperty("Content-Type", "application/json");
       connection.setRequestProperty("Accept", "application/json");
       connection.getOutputStream().write(body.getBytes("UTF-8"));
@@ -282,36 +137,10 @@ public final class Api {
   private static HttpURLConnection open(String fullUrl) throws Exception {
     HttpURLConnection connection = (HttpURLConnection) new URL(fullUrl).openConnection();
     connection.setRequestMethod("GET");
-    connection.setConnectTimeout(10000);
-    connection.setReadTimeout(10000);
+    connection.setConnectTimeout(TIMEOUT_MS);
+    connection.setReadTimeout(TIMEOUT_MS);
     connection.setRequestProperty("Accept", "application/json");
     return connection;
-  }
-
-  /** POST із JSON-тілом. */
-  private HttpURLConnection openJson(String path, String body) throws Exception {
-    HttpURLConnection connection =
-        (HttpURLConnection) new URL(new Prefs(context).api() + path).openConnection();
-    connection.setRequestMethod("POST");
-    connection.setDoOutput(true);
-    connection.setConnectTimeout(10000);
-    connection.setReadTimeout(10000);
-    connection.setRequestProperty("Content-Type", "application/json");
-    connection.setRequestProperty("Accept", "application/json");
-    connection.getOutputStream().write(body.getBytes("UTF-8"));
-    connection.getOutputStream().close();
-    return connection;
-  }
-
-  /** Текст помилки з відповіді сервера, якщо його вдалося прочитати. */
-  private static String parseError(HttpURLConnection connection) {
-    try {
-      java.io.InputStream stream = connection.getErrorStream();
-      if (stream == null) return "Сервер відповів помилкою";
-      return textField(read(stream), "error");
-    } catch (Exception error) {
-      return "Сервер відповів помилкою";
-    }
   }
 
   private static String jsonString(String value) {
@@ -341,13 +170,32 @@ public final class Api {
     }
   }
 
-  public void send(final double lat, final double lon, final float acc, final Callback callback) {
+  /**
+   * Надсилає одну точку.
+   *
+   * fixAt — час, коли точка була виміряна, а не коли ми вирішили її
+   * відправити. Раніше туди йшов System.currentTimeMillis(), тож свіжа
+   * точка могла прийти на сервер із часом на півгодини пізніше свого
+   * справжнього вимірювання.
+   */
+  public void send(
+      final double lat,
+      final double lon,
+      final float acc,
+      final long fixAt,
+      final Callback callback) {
     final Prefs prefs = new Prefs(context);
-    pool.execute(
+    points.execute(
         new Runnable() {
           @Override
           public void run() {
-            callback.onResult(doSend(prefs, lat, lon, acc));
+            // Дешева перевірка перед запитом: без неї ми щохвилини чекаємо
+            // по 5 секунд таймауту там, де мережі немає взагалі.
+            if (!online(context)) {
+              callback.onResult("немає мережі");
+              return;
+            }
+            callback.onResult(doSend(prefs, lat, lon, acc, fixAt));
           }
         });
   }
@@ -375,8 +223,8 @@ public final class Api {
       connection = (HttpURLConnection) url.openConnection();
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
-      connection.setConnectTimeout(10000);
-      connection.setReadTimeout(10000);
+      connection.setConnectTimeout(TIMEOUT_MS);
+      connection.setReadTimeout(TIMEOUT_MS);
       connection.setRequestProperty("Accept", "application/json");
       connection.setRequestProperty("Content-Length", "0");
       connection.getOutputStream().close();
@@ -423,7 +271,7 @@ public final class Api {
     return text.toString();
   }
 
-  private String doSend(Prefs prefs, double lat, double lon, float acc) {
+  private String doSend(Prefs prefs, double lat, double lon, float acc, long fixAt) {
     HttpURLConnection connection = null;
     try {
       StringBuilder query = new StringBuilder();
@@ -431,8 +279,9 @@ public final class Api {
       query.append("&code=").append(enc(prefs.code()));
       query.append("&lat=").append(String.format(java.util.Locale.US, "%.6f", lat));
       query.append("&lon=").append(String.format(java.util.Locale.US, "%.6f", lon));
-      query.append("&t=").append(System.currentTimeMillis());
-      if (acc > 0) query.append("&acc=").append(Math.round(acc));
+      // Час вимірювання точки, а не час відправки.
+      query.append("&t=").append(fixAt > 0 ? fixAt : System.currentTimeMillis());
+      if (acc > 0 && acc < 9999f) query.append("&acc=").append(Math.round(acc));
       if (!prefs.name().isEmpty()) query.append("&name=").append(enc(prefs.name()));
       Integer battery = batteryPercent();
       if (battery != null) query.append("&bat=").append(battery);
@@ -440,8 +289,8 @@ public final class Api {
       URL url = new URL(prefs.api() + "/api/ingest?" + query);
       connection = (HttpURLConnection) url.openConnection();
       connection.setRequestMethod("GET");
-      connection.setConnectTimeout(10000);
-      connection.setReadTimeout(10000);
+      connection.setConnectTimeout(TIMEOUT_MS);
+      connection.setReadTimeout(TIMEOUT_MS);
       connection.setRequestProperty("Accept", "application/json");
 
       int status = connection.getResponseCode();

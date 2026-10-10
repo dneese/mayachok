@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="ru.dneese.mayachok"
-    android:versionCode="5"
-    android:versionName="1.6">
+    android:versionCode="6"
+    android:versionName="1.7">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -10,10 +10,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <!-- Android 14+ вимагає окремий дозвіл під тип foreground-сервісу.
-         dataSync — для ChatService, який опитує Worker і показує сповіщення. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Дозволу на сповіщення немає: єдине сповіщення — технічне, від самого
+         трекера. Android 13+ просто не покаже його в шухляді, але сервіс
+         працюватиме. Колишній чат, що слави про повідомлення, прибрано. -->
 
     <uses-feature
         android:name="android.hardware.location.gps"
@@ -49,12 +48,6 @@
             android:name=".TrackerService"
             android:exported="false"
             android:foregroundServiceType="location" />
-
-        <!-- Стежить за чатом у фоні й показує сповіщення про нові повідомлення -->
-        <service
-            android:name=".ChatService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
 
     </application>
 </manifest>
