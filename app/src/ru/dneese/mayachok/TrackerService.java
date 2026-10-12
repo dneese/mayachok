@@ -11,6 +11,10 @@ import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -70,6 +74,28 @@ public final class TrackerService extends Service implements LocationListener {
   // GPS не перезапитуємо частіше за цей час — інакше просто гріємо чіп.
   private static final long GPS_RESUME_DELAY_MS = 60 * 1000L;
 
+  // --- виявлення руху за акселерометром ---
+  //
+  // Навіщо, якщо вже є GPS: щоб зрозуміти, що телефон рухається, GPS-фікса
+  // не потрібно. GNSS бачить лише наслідок (змінилась координата), а
+  // акселерометр — причину. Тому телефон може зрозуміти «людина пішла» ще
+  // тоді, коли супутників немає взагалі (підвал, метро), і одразу ввімкнути
+  // GPS замість того, щоб чекати на heartbeat.
+  //
+  // Поріг навмисно такий малий: 0,35 м/с² — це ледь помітне зміщення,
+  // набагато менше за крок людини. Щоб струснути стіл не вистачало.
+  private static final float MOTION_ACCEL_MS2 = 0.35f;
+  // Стільки Samples поспільшки мають перевищити поріг, щоб вважати рух.
+  // Фільтр проти одноразових стрибків (стук у двері, автобус на гальмах).
+  private static final int MOTION_HITS = 3;
+  // А стільки тихих — щоб рух вважався завершеним.
+  private static final int QUIET_HITS = 5;
+  // Скільки чекати на фікса після руху, перш ніж надсилати точку.
+  // GPS у відкритому небі бере 5–15 секунд; у машині й під дахом — більше.
+  private static final long MOTION_SEND_DELAY_MS = 12 * 1000L;
+  // Повторна спроба, якщо GPS не встиг на холодному старті.
+  private static final long MOTION_RETRY_MS = 10 * 1000L;
+
   private LocationManager locationManager;
   // GPS-фікси приходять на gpsThread, таймер.sendNow() — на timerThread.
   // Різні лоопери навмисно: handler.removeCallbacksAndMessages(null) на таймері
@@ -105,6 +131,14 @@ public final class TrackerService extends Service implements LocationListener {
   private long gpsOffUntil;
   private volatile boolean timerRunning;
 
+  // --- акселерометр ---
+  private SensorManager sensorManager;
+  private Sensor motionSensor; // linear acceleration: без сили тяжіння
+  private boolean sensorOn;
+  private int motionHits;
+  private int quietHits;
+  private volatile boolean motionDetected;
+
   private String lastNotificationText = "";
   private long lastNotificationAt;
 
@@ -114,6 +148,16 @@ public final class TrackerService extends Service implements LocationListener {
     api = new Api(this);
     prefs = new Prefs(this);
     locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+    sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+    if (sensorManager != null) {
+      // TYPE_LINEAR_ACCELERATION не включає силу тяжіння: на столі він
+      // показує нуль, тож «зрушили» і «стоїть» не треба розрізняти вручну.
+      // Де такого сенсора немає — візьмемо звичайний акселерометр і
+      // віднімемо гравітацію самі.
+      motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
+      if (motionSensor == null) motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+    }
+    if (motionSensor == null) Log.w(TAG, "акселерометра немає — визначатимемо рух лише за GPS");
     ensureChannel();
     startInForeground("Очікування сигналу GPS…");
   }
@@ -145,6 +189,11 @@ public final class TrackerService extends Service implements LocationListener {
 
       requestNetworkUpdates();
       startGpsIfWorth();
+      // Відкриваємо вікно: одразу після старту акселерометр має зрозуміти,
+      // чи телефон уже рухається — інакше перший рух буде помічено аж через
+      // інтервал.
+      watchUntil = SystemClock.elapsedRealtime() + GPS_WATCH_MIN_MS;
+      updateMotionSensor();
       scheduleNextSend(0);
     } else if (!timerRunning) {
       // Сервіс підняли знову (sticky-перезапуск) — таймер уже зупинено,
@@ -203,8 +252,106 @@ public final class TrackerService extends Service implements LocationListener {
    * не можна ані показувати на карті як «зараз тут», ані перевіряти ними
    * «чи хтось рухається».
    */
-  private boolean hasFreshFix() {
-    return haveFix && System.currentTimeMillis() - lastFixAt <= MAX_FIX_AGE_MS;
+private boolean hasFreshFix() {
+     return haveFix && System.currentTimeMillis() - lastFixAt <= MAX_FIX_AGE_MS;
+   }
+
+  private final SensorEventListener motionListener =
+      new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+          float x = event.values[0];
+          float y = event.values[1];
+          float z = event.values[2];
+
+          if (Sensor.TYPE_ACCELEROMETER == event.sensor.getType()) {
+            // Звичайний акселерометр містить і силу тяжіння: телефон, що лежить
+            // на столі, «відчуває» постійні 9,8 м/с². Щоб не вважати це рухом,
+            // віднімаємо гравітацію за напрямом вектора.
+            float norm = (float) Math.sqrt(x * x + y * y + z * z);
+            if (norm > 0.1f) {
+              float k = 9.80665f / norm;
+              x -= x * k;
+              y -= y * k;
+              z -= z * k;
+            }
+          }
+
+          float magnitude = (float) Math.sqrt(x * x + y * y + z * z);
+          if (magnitude > MOTION_ACCEL_MS2) {
+            quietHits = 0;
+            if (++motionHits >= MOTION_HITS && !motionDetected) {
+              motionDetected = true;
+              onMotionStarted();
+            }
+          } else {
+            motionHits = 0;
+            if (motionDetected && ++quietHits >= QUIET_HITS) {
+              motionDetected = false;
+              onMotionStopped();
+            }
+          }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+      };
+
+  /**
+   * Почався рух: телефон лежав, а його взяли в руки, чи він у машині.
+   *
+   * Нової GPS-точки ще немає, але ми вже знаємо, що чекати на heartbeat
+   * не варто, тож вмикаємо GNSS. Зазвичай фікса приходить за 10–30 секунд.
+   */
+  private void onMotionStarted() {
+    watchUntil = SystemClock.elapsedRealtime() + GPS_WATCH_MIN_MS;
+    Log.i(TAG, "рух за акселерометром — вмикаю GPS");
+    updateNotification(notificationText(null));
+    startGpsIfWorth();
+
+    // Не чекаємо на звичайний інтервал: поки ми чекали б нього, людина
+    // вже встигла б пройти сто метрів, і карта відставала б.
+    // Даємо GPS короткий час на «побачити» супутники й одразу шлемо точку.
+    if (timer == null) return;
+    timer.removeCallbacks(motionSendTask);
+    timer.postDelayed(motionSendTask, MOTION_SEND_DELAY_MS);
+  }
+
+  private final Runnable motionSendTask =
+      new Runnable() {
+        @Override
+        public void run() {
+          sendNow();
+        }
+      };
+
+  private void onMotionStopped() {
+    Log.i(TAG, "руху немає — телефон лежить");
+  }
+
+  /**
+   * Акселерометр працює весь час, поки ввімкнено трекер.
+   *
+   * Чому не «лише у вікні після відправки»: щоб помітити, що людину
+   * взяли в руки, датчик має вже слухати. Якщо вимикати його в спокої,
+   * перший же рух буде помічено аж на наступному тіку таймера — тобто
+   * через інтервал (до 5 хвилин). Симуляція (worker/tracker-sim.mjs)
+   * дає затримку 22 с проти 300 с саме через це.
+   *
+   * Витрата прийнятна: датчик безперервно живить «сенсорна» мікросхема,
+   * тож CPU спить між зразками (200 мс). GNSS, який споживає в рази
+   * більше, завдяки цьому ж і вимикається насправді.
+   */
+  private synchronized void updateMotionSensor() {
+    if (sensorManager == null || motionSensor == null || gpsHandler == null) return;
+    if (sensorOn) return;
+
+    // SENSOR_DELAY_NORMAL ≈ 200 мс: достатньо, щоб не пропустити початок
+    // ходьби, і дешево — сам датчик працює в сенсорній мікросхемі.
+    sensorManager.registerListener(
+        motionListener, motionSensor, SensorManager.SENSOR_DELAY_NORMAL, gpsHandler);
+    sensorOn = true;
+    Log.i(TAG, "акселерометр увімкнено: стежу за рухом");
   }
 
   /**
@@ -221,6 +368,7 @@ public final class TrackerService extends Service implements LocationListener {
    * зрушив — GNSS-чіп справді спить далі.
    */
   private synchronized boolean gpsNeeded() {
+    if (motionDetected) return true; // телефон рухається — точка потрібна зараз
     if (!hasFreshFix()) return true; // точки немає — треба її дістати
     if (lastAcc > GPS_WORTH_ACCURACY) return true; // остання занадто груба
     if (SystemClock.elapsedRealtime() < watchUntil) return true; // ще чекаємо руху
@@ -234,6 +382,8 @@ public final class TrackerService extends Service implements LocationListener {
 
     requestUpdatesFor(LocationManager.GPS_PROVIDER, prefs.intervalSeconds() * 1000L, 0f);
     gpsActive = true;
+    // Рух триває: продовжуємо стежити за акселерометром, доки він не скінчиться.
+    updateMotionSensor();
 
     // Холодний старт GPS триває до хвилини. Якщо фікса так і не буде —
     // повернемось пізніше, замість того щоб розпрягати чіп назавжди.
@@ -364,8 +514,17 @@ public final class TrackerService extends Service implements LocationListener {
       // Без цього телефон просто чекав би на heartbeat, тобто до 30 хвилин.
       startGpsIfWorth();
       maybeStopGps();
+      // Рух ми вже помітили, але GPS ще не встиг: намір «надіслати» не
+      // можна втрачати, бо інакше точка піде аж на наступному тіку таймера.
+      if (motionDetected && timer != null) {
+        timer.removeCallbacks(motionSendTask);
+        timer.postDelayed(motionSendTask, MOTION_RETRY_MS);
+      }
       return;
     }
+    // Акселерометр працює тільки у вікні очікування, тож на кожному тіку
+    // перевіряємо, чи не час його закрити.
+    updateMotionSensor();
 
     double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
 
@@ -376,7 +535,13 @@ public final class TrackerService extends Service implements LocationListener {
       heartbeatMs = HEARTBEAT_MS;
     }
 
-    boolean send = !haveSent || moved >= SEND_MIN_METERS || now - lastSentAt >= heartbeatMs;
+    // Рух — головна підстава надсилати. Коли людина йде або їде, карта має
+    // йти за нею, а не чекати закриття вікна серцебиття.
+    boolean send =
+        !haveSent
+            || motionDetected
+            || moved >= SEND_MIN_METERS
+            || now - lastSentAt >= heartbeatMs;
     if (!send) {
       maybeStopGps();
       return;
@@ -551,6 +716,14 @@ public final class TrackerService extends Service implements LocationListener {
     } catch (Exception ignored) {
       // сервіс уже відсутній у системі
     }
+    // Акселерометр обов'язково знімаємо: забутий слухач датчика — це
+    // постійна витрата батареї, поки застосунок у фоні.
+    try {
+      if (sensorManager != null) sensorManager.unregisterListener(motionListener);
+    } catch (Exception ignored) {
+      // датчик уже відключений
+    }
+    sensorOn = false;
 
     // Екран показує «Трекер активний» саме за цим прапорцем. Без скидання
     // убитий процес лишав би зелену крапку при мертвому надсиланні — саме
