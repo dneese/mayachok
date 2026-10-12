@@ -54,11 +54,19 @@ public final class TrackerService extends Service implements LocationListener {
 
   // Старість фікса, якій ще можна довіряти. Далі — не надсилаємо нічого:
   // краще показати «очікуємо GPS», ніж видавати позавчорашню точку за теперішню.
+  // Це водночас і стеля затримки: щойно фікса протухла, ми вмикаємо GPS
+  // знову, щоб не чекати на heartbeat (до 30 хвилин).
   private static final long MAX_FIX_AGE_MS = 5 * 60 * 1000L;
-  // Якщо остання точка старша за це — вмикаємо GPS навіть у спокої.
-  private static final long GPS_STALE_MS = 10 * 60 * 1000L;
+  // Скільки дивимося «через плече» на рух після кожної відправки.
+  // Щоб помітити початок руху, GPS має бути увімкнений саме в це вікно:
+  // вимкнемо раніше — і дізнаємось про рух лише через heartbeat.
+  // Не менше за два інтервали, інакше при інтервалі 5 хв фікса просто не встигне.
+  private static final long GPS_WATCH_MIN_MS = 3 * 60 * 1000L;
   // Точність гірша за цю — GPS не дає нічого корисного, network не гірше.
   private static final float GPS_WORTH_ACCURACY = 50f;
+  // «Прийнятна» точність. Добре (≤ GOOD_ACCURACY) — можна показувати як
+  // позицію людини; гірше — лише якщо кращих даних у нас немає взагалі.
+  private static final float GOOD_ACCURACY = 200f;
   // GPS не перезапитуємо частіше за цей час — інакше просто гріємо чіп.
   private static final long GPS_RESUME_DELAY_MS = 60 * 1000L;
 
@@ -187,40 +195,62 @@ public final class TrackerService extends Service implements LocationListener {
    *
    * Економія тут найбільша: GNSS-чіп у спокої просто спить.
    */
+  /**
+   * Чи є фікса, якій ще можна довіряти як ПОТОЧНІЙ.
+   *
+   * Ключова різниця з haveFix: той прапорць стає істиною назавжди й лише
+   * каже «фікс був колись». Тут миморимо час самої точки — старі дані
+   * не можна ані показувати на карті як «зараз тут», ані перевіряти ними
+   * «чи хтось рухається».
+   */
+  private boolean hasFreshFix() {
+    return haveFix && System.currentTimeMillis() - lastFixAt <= MAX_FIX_AGE_MS;
+  }
+
+  /**
+   * Чи варто взагалі тримати GNSS-чіп увімкненим.
+   *
+   * Тут була розсипана логіка, через яку рух міг «заснути» надовго: щоб
+   * зрозуміти, що людина пішла, потрібна нова фікса, а нова фікса
+   * можлива лише коли GPS увімкнений. Якщо вимкнути його одразу після
+   * відправки — телефон дізнається про рух лише через heartbeat, тобто
+   * через півгодини.
+   *
+   * Тому після КОЖНОЇ відправки ми ще дивимося «через плече» GPS_WATCH_MS:
+   * цього вистачає, щоб помітити початок руху. Якщо за це вікно ніхто не
+   * зрушив — GNSS-чіп справді спить далі.
+   */
+  private synchronized boolean gpsNeeded() {
+    if (!hasFreshFix()) return true; // точки немає — треба її дістати
+    if (lastAcc > GPS_WORTH_ACCURACY) return true; // остання занадто груба
+    if (SystemClock.elapsedRealtime() < watchUntil) return true; // ще чекаємо руху
+    return false;
+  }
+
   private synchronized void startGpsIfWorth() {
     if (gpsActive || gpsHandler == null) return;
-    long now = SystemClock.elapsedRealtime();
-    if (now < gpsOffUntil) return;
-
-    double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
-    boolean stale = !haveFix || System.currentTimeMillis() - lastFixAt > GPS_STALE_MS;
-    boolean inaccurate = haveFix && lastAcc > GPS_WORTH_ACCURACY;
-
-    if (!stale && !inaccurate && moved < SEND_MIN_METERS) return;
+    if (SystemClock.elapsedRealtime() < gpsOffUntil) return;
+    if (!gpsNeeded()) return;
 
     requestUpdatesFor(LocationManager.GPS_PROVIDER, prefs.intervalSeconds() * 1000L, 0f);
     gpsActive = true;
 
-    // Холодний старт GPS може тривати хвилину. Якщо ми зупинимось через
-    // 60 секунд і фікса так і не буде — повернемось пізніше, замість того
-    // щоб розпрягати чіп назавжди.
+    // Холодний старт GPS триває до хвилини. Якщо фікса так і не буде —
+    // повернемось пізніше, замість того щоб розпрягати чіп назавжди.
     gpsHandler.postDelayed(
         new Runnable() {
           @Override
           public void run() {
-            stopGpsIfIdle();
+            maybeStopGps();
           }
         },
         GPS_RESUME_DELAY_MS);
   }
 
-  /** GPS можна вимкнути: ми стоїмо, точка свіжа й достатньо точна. */
-  private synchronized void stopGpsIfIdle() {
+  /** GNSS можна вимкнути: ніхто не рухається і точка свіжа. */
+  private synchronized void maybeStopGps() {
     if (!gpsActive) return;
-    double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
-    boolean stale = !haveFix || System.currentTimeMillis() - lastFixAt > GPS_STALE_MS;
-    boolean inaccurate = haveFix && lastAcc > GPS_WORTH_ACCURACY;
-    if (stale || inaccurate || moved >= SEND_MIN_METERS) return;
+    if (gpsNeeded()) return;
 
     try {
       locationManager.removeUpdates(this);
@@ -237,6 +267,11 @@ public final class TrackerService extends Service implements LocationListener {
     Log.i(TAG, "GPS вимкнено: стоїмо, точка свіжа");
   }
 
+  // Вікно, протягом якого ми ще чекаємо початку руху після відправки.
+  // Пишемо з потоку Api (після відправки) і з потоку GPS (при русі),
+  // читаємо з таймера — тому volatile.
+  private volatile long watchUntil;
+
   @Override
   public void onLocationChanged(Location location) {
     long now = System.currentTimeMillis();
@@ -245,33 +280,41 @@ public final class TrackerService extends Service implements LocationListener {
     if (now - location.getTime() > MAX_FIX_AGE_MS) return;
 
     String provider = location.getProvider();
-    // Network-фікса зазвичай точніша за дрейф GPS у приміщенні, але програє
-    // справжньому GPS на вулиці. Тому беремо найкраще з наявного.
-    if (haveFix && !isBetterThanCurrent(location)) {
-      // Нічого не змінилось — лише оновлюємо час фікса, щоб freshness рахувався
-      // від свіжої інформації, а не від часу обробки.
-      if (now - lastFixAt > MAX_FIX_AGE_MS) lastFixAt = location.getTime();
-      return;
-    }
+    float incoming = location.hasAccuracy() ? location.getAccuracy() : 9999f;
+    boolean fresher = location.getTime() > lastFixAt;
+    boolean muchBetter = incoming + 100f < lastAcc;
+
+    // Обираємо, чи замінювати наявну точку новою.
+    //
+    // Простий варіант «новіша — значить краща» тут небезпечний: стоячи в
+    // одному місці, мережа може тримати точку за 1–2 км (округлення до
+    // вишки), і ми відсилали б «порожній» маркер. Тому коли в нас уже є
+    // добра точка (accuracy ≤ 200 м), нам гіршу пропонувати не приймаємо,
+    // і замість цього просимо GPS.
+    boolean incomingGood = incoming <= GOOD_ACCURACY;
+    boolean currentGood = haveFix && lastAcc <= GOOD_ACCURACY;
+    boolean accept;
+    if (!haveFix) accept = true;
+    else if (incomingGood && !currentGood) accept = true; // краще за те, що є
+    else if (!incomingGood && currentGood) accept = false; // погірше — ігноруємо
+    else accept = fresher || muchBetter; // обидві прийнятні — беремо новішу
+
+    if (!accept) return;
 
     lastLat = location.getLatitude();
     lastLon = location.getLongitude();
-    lastAcc = location.hasAccuracy() ? location.getAccuracy() : 9999f;
+    lastAcc = incoming;
     lastFixAt = location.getTime();
     haveFix = true;
 
     updateNotification(notificationText(provider));
-    // Рух ⇒ GPS знову потрібен, щоб точність не відставала.
-    if (provider != null && LocationManager.GPS_PROVIDER.equals(provider)) startGpsIfWorth();
-  }
 
-  /** Чи ця точка краща за ту, що вже маємо. */
-  private boolean isBetterThanCurrent(Location location) {
-    float incoming = location.hasAccuracy() ? location.getAccuracy() : 9999f;
-    // Свіжість важливіша за точність: прострочені дані не мають сенсу.
-    boolean incomingFresher = location.getTime() > lastFixAt + 1000L;
-    if (incomingFresher && incoming < 200f) return true;
-    return incoming + 100f < lastAcc;
+    // Зрушили — продовжуємо дивитися за рухом, інакше GPS вимкнеться саме
+    // в моменті, коли людина почала йти.
+    if (haveSent && metersFrom(lastSentLat, lastSentLon) >= SEND_MIN_METERS) {
+      watchUntil = SystemClock.elapsedRealtime() + GPS_WATCH_MIN_MS;
+    }
+    startGpsIfWorth();
   }
 
   @Override
@@ -313,8 +356,14 @@ public final class TrackerService extends Service implements LocationListener {
     if (inFlight) return; // попередній запит ще в дорозі — не плодимо другий
 
     long now = System.currentTimeMillis();
-    if (!haveFix) {
+
+    // Свіжість, а не «фікс був колись». Прапорець haveFix живе вічно, тож
+    // на нього спиратися не можна: стара точка — це не поточна позиція.
+    if (!hasFreshFix()) {
+      // Немає свіжої точки — не надсилаємо стару, а просимо нову.
+      // Без цього телефон просто чекав би на heartbeat, тобто до 30 хвилин.
       startGpsIfWorth();
+      maybeStopGps();
       return;
     }
 
@@ -329,7 +378,7 @@ public final class TrackerService extends Service implements LocationListener {
 
     boolean send = !haveSent || moved >= SEND_MIN_METERS || now - lastSentAt >= heartbeatMs;
     if (!send) {
-      stopGpsIfIdle();
+      maybeStopGps();
       return;
     }
 
@@ -372,9 +421,18 @@ public final class TrackerService extends Service implements LocationListener {
             haveSent = true;
             prefs.setLastSentAt(lastSentAt);
 
+            // Відкриваємо вікно спостереження за рухом. Без цього maybeStopGps()
+            // вимкнув би GNSS одразу після відправки, і ми дізналися б про рух
+            // лише тоді, коли протухне фікса — тобто за 5 хвилин, а в спокої
+            // так і не дізналися б (див. GPS_WATCH_MIN_MS).
+            watchUntil =
+                SystemClock.elapsedRealtime()
+                    + Math.max(
+                        GPS_WATCH_MIN_MS, prefs.intervalSeconds() * 2000L);
+
             Log.i(TAG, "точку надіслано");
             updateNotification(notificationText(LocationManager.GPS_PROVIDER));
-            stopGpsIfIdle();
+            maybeStopGps();
           }
         });
   }

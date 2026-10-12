@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | 🗺 **[Відкрити мапу](https://dneese.github.io/mayachok/)** | дивитися групу в браузері |
-| 📦 **[Завантажити застосунок для Android](https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk)** | версія **1.7**, без реєстрації й реклами |
+| 📦 **[Завантажити застосунок для Android](https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk)** | версія **1.7.1**, без реєстрації й реклами |
 
 Посилання завжди веде на найновішу збірку: після виходу нової версії
 старе посилання продовжує працювати, окремо нічого оновлювати не треба.
