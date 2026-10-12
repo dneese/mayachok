@@ -20,6 +20,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
@@ -66,6 +68,8 @@ public final class MainActivity extends Activity {
 
   private Spinner intervalSpinner;
   private Button toggle;
+  private CheckBox diagBox;
+  private TextView diagState;
 
   private View mainPanel;
   private LinearLayout mapPanel;
@@ -103,6 +107,8 @@ public final class MainActivity extends Activity {
 
     intervalSpinner = findViewById(R.id.interval);
     toggle = findViewById(R.id.toggle);
+    diagBox = findViewById(R.id.diag);
+    diagState = findViewById(R.id.diag_state);
 
     mainPanel = findViewById(R.id.main_panel);
     mapPanel = findViewById(R.id.map_panel);
@@ -237,6 +243,55 @@ public final class MainActivity extends Activity {
             goBack();
           }
         });
+
+    diagBox.setOnCheckedChangeListener(
+        new CompoundButton.OnCheckedChangeListener() {
+          @Override
+          public void onCheckedChanged(CompoundButton button, boolean checked) {
+            // render() виставляє стан програмно, тож реагуємо лише на тап.
+            if (button.isPressed()) onDiagnosticsToggled(checked);
+          }
+        });
+  }
+
+  /**
+   * Діагностика ввімкнена або вимкнена.
+   *
+   * Одразу кажемо про найчастішу причину, через яку точки не йдуть на
+   * Samsung/Xiaomi/Huawei: система вбиває застосунок в фоні. Далі
+   * Android робитиме це автоматично, тож краще виправити зараз.
+   */
+  private void onDiagnosticsToggled(boolean enabled) {
+    prefs.setDiagnostics(enabled);
+    if (enabled) {
+      Diag.attach(this);
+      Diag.event(Diag.PERMISSION, hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ? 1 : 0,
+          Diag.powerSaveMode() ? 1 : 0, Diag.backgroundRestricted() ? 1 : 0,
+          "діагностику ввімкнено користувачем");
+
+      if (!Diag.ignoresBatteryOptimizations() || Diag.powerSaveMode()) {
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.label_diag)
+            .setMessage(R.string.diag_battery_hint)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(
+                R.string.diag_open_settings,
+                new android.content.DialogInterface.OnClickListener() {
+                  @Override
+                  public void onClick(android.content.DialogInterface dialog, int which) {
+                    try {
+                      startActivity(Diag.batterySettingsIntent());
+                    } catch (Exception error) {
+                      toast("Не вдалося відкрити налаштування");
+                    }
+                  }
+                })
+            .show();
+      }
+    } else {
+      Diag.flush();
+    }
+    render();
   }
 
   /**
@@ -645,6 +700,20 @@ public final class MainActivity extends Activity {
 
     boolean tracking = isTracking();
     toggle.setText(tracking ? R.string.btn_stop : R.string.btn_start);
+
+    // Діагностика: показуємо стан, щоб не було невідомості, чи вона ввімкнена.
+    diagBox.setChecked(prefs.diagnostics());
+    diagBox.setEnabled(hasGroup);
+    if (!hasGroup) {
+      diagState.setVisibility(View.GONE);
+    } else if (prefs.diagnostics()) {
+      diagState.setVisibility(View.VISIBLE);
+      diagState.setText(
+          (Diag.ignoresBatteryOptimizations() ? "" : "Оптимізація батареї увімкнена — ")
+              + (Diag.powerSaveMode() ? "режим енергозбереження" : "надсилається"));
+    } else {
+      diagState.setVisibility(View.GONE);
+    }
 
     int dotColor;
     if (tracking) {

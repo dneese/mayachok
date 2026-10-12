@@ -18,6 +18,9 @@ const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
 // щохвилини після 15, хоча ми точно знаємо, де вона.
 const FRESH_MINUTES = 30;
 const MAX_NAME_LEN = 24;
+// Діагностика живе два дні й зникає сама. Коротко тому, що це телеметрія
+// з чужого телефону: навіть якщо про неї забудуть, вона не накопичиться.
+const DIAG_RETENTION_MS = 48 * 60 * 60 * 1000;
 
 // Алфавіт без i, l, o, u — щоб не плутати при диктуванні телефоном.
 // 12 символів × 5 біт = 60 біт: перебір неможливий, а набирається легко.
@@ -418,14 +421,94 @@ async function handleHealth(db) {
 }
 
 
-async function cleanup(db) {
+/**
+ * Діагностика від телефона: що він насправді робив і чому не надсилав точки.
+ *
+ * Увімкнена користувачем галочкою, за замовчуванням вимкнена. Координат
+ * у ній немає — лише події та причини. Живе 48 годин і прибирається тим
+ * самим cron, що й решта. Тому це не «пिशовик назавжди», а тимчасовий
+ * інструмент, який легко собі набути й легко забути вимкнути.
+ */
+async function handleDiagIngest(request, db) {
+  const body = await request.json().catch(() => null);
+  if (!body) return bad('invalid json');
+
+  const gid = await groupIdFor(body.code);
+  if (!gid) return bad('invalid code');
+  const uid = String(body.uid || '');
+  if (!uid) return bad('uid required');
+
+  const events = Array.isArray(body.events) ? body.events : [];
+  // Жорсткий ліміт на запит: інакше помилка в телефоні або зловмисник
+  // вичерпає денний ліміт запису D1 на всю систему.
+  const limited = events.slice(0, 200);
+  if (limited.length === 0) return json({ ok: true, stored: 0 });
+
+  const session = String(body.session || '').slice(0, 16);
+  const dropped = Number(body.dropped) || 0;
+
+  const statements = limited.map((event) =>
+    db
+      .prepare(
+        `INSERT INTO diag (gid, uid, session, ts, e, a, b, c, s)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      )
+      .bind(
+        gid,
+        uid,
+        session,
+        Number(event.t) || Date.now(),
+        Number(event.e) || 0,
+        Number(event.a) || 0,
+        Number(event.b) || 0,
+        Number(event.c) || 0,
+        String(event.s || '').slice(0, 200),
+      ),
+  );
+
+  // Один batch замість N окремих запитів: інакше ми самі собі виїдаємо
+  // ліміт D1 (100k записів на добу спільно на все).
+  await db.batch(statements);
+  meters.writes += statements.length;
+  return json({ ok: true, stored: statements.length, dropped });
+}
+
+/** Читання діагностики — для розробника, а не для учасників групи. */
+async function handleDiagRead(request, db) {
+  const params = await readParams(request);
+  const gid = await groupIdFor(params.get('code'));
+  if (!gid) return bad('invalid code');
+
+  const uid = params.get('uid');
+  const limit = Math.min(Math.max(Number(params.get('limit')) || 500, 1), 5000);
+
+  const base = 'SELECT session, ts, e, a, b, c, s FROM diag WHERE gid = ?1';
+  const { results } =
+    uid && uid !== 'all'
+      ? await db.prepare(base + ' AND uid = ?2 ORDER BY ts ASC LIMIT ?3').bind(gid, uid, limit).all()
+      : await db.prepare(base + ' ORDER BY ts ASC LIMIT ?2').bind(gid, limit).all();
+
+  const names = await db
+    .prepare('SELECT name FROM users WHERE gid = ?1 AND uid = ?2')
+    .bind(gid, uid && uid !== 'all' ? uid : '')
+    .first();
+
+  return json({ ok: true, who: names ? names.name : null, events: results });
+}
+
+async function handleCleanup(db) {
+  const diagCutoff = Date.now() - DIAG_RETENTION_MS;
   const usersCutoff = Date.now() - MEMBER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const groupsCutoff = Date.now() - GROUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const b = await db.prepare('DELETE FROM users WHERE last_seen < ?1').bind(usersCutoff).run();
   const c = await db.prepare('DELETE FROM groups WHERE created_at < ?1').bind(groupsCutoff).run();
+  // Діагностика — тимчасова: два дні, і вона видаляється сама, навіть якщо
+  // про неї забули. Тому вона й не більша за добу в масовому режимі.
+  const e = await db.prepare('DELETE FROM diag WHERE ts < ?1').bind(diagCutoff).run();
   return {
     deletedUsers: (b.meta && b.meta.changes) || 0,
     deletedGroups: (c.meta && c.meta.changes) || 0,
+    deletedDiag: (e.meta && e.meta.changes) || 0,
   };
 }
 
@@ -482,6 +565,8 @@ export default {
       }
       if (path === '/api/rename') return await handleRename(request, db);
       if (path === '/api/leave') return await handleLeave(request, db);
+      if (path === '/api/diag' && request.method === 'POST') return await handleDiagIngest(request, db);
+      if (path === '/api/diag') return await handleDiagRead(request, db);
       if (path === '/api/health') return await handleHealth(db);
 
       // Сумісність зі старим gps.php: ?lat=&lon=&t=
@@ -498,6 +583,7 @@ export default {
             '/api/group',
             '/api/rename',
             '/api/leave',
+            '/api/diag',
             '/api/health',
           ],
         },
@@ -509,6 +595,6 @@ export default {
   },
 
   async scheduled(event, env) {
-    return cleanup(env.DB);
+    return handleCleanup(env.DB);
   },
 };

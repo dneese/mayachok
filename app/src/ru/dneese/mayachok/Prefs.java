@@ -96,6 +96,22 @@ public final class Prefs {
     sp.edit().putString("last_send_error", error == null ? "" : error).apply();
   }
 
+  /**
+ * Чи надсилати діагностику.
+ *
+ * За замовчуванням вимкнено й має лишатися таким: проєкт будується на
+ * мінімумі даних, і «зручно розробникові» не є достатньою причиною збирати
+ * телеметрію з чужого телефону. Вмикається руками й легко вимикається.
+ * Рядки живуть 48 годин і не містять координат.
+ */
+public boolean diagnostics() {
+    return sp.getBoolean("diagnostics", false);
+  }
+
+  public void setDiagnostics(boolean enabled) {
+    sp.edit().putBoolean("diagnostics", enabled).apply();
+  }
+
   public String api() {
     return API;
   }

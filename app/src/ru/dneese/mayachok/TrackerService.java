@@ -163,6 +163,7 @@ public final class TrackerService extends Service implements LocationListener {
   private volatile boolean inFlight;
 
   private boolean gpsActive;
+  private long gpsOnAt; // коли увімкнули GNSS — для вимірювання TTFF
   private long gpsOffUntil;
   private volatile boolean timerRunning;
 
@@ -200,6 +201,21 @@ public final class TrackerService extends Service implements LocationListener {
       significantMotion = sensorManager.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION);
     }
     if (motionSensor == null) Log.w(TAG, "акселерометра немає — визначатимемо рух лише за GPS");
+
+    Diag.attach(this);
+    if (prefs.diagnostics()) {
+      Diag.event(Diag.SENSORS,
+          motionSensor == null ? 0 : 1,
+          significantMotion == null ? 0 : 1,
+          significantArmed ? 1 : 0,
+          "lin=" + (motionSensor != null ? motionSensor.getName() : "-")
+              + " sig=" + (significantMotion != null ? "так" : "ні"));
+      Diag.event(Diag.PERMISSION,
+          hasLocationPermission() ? 1 : 0,
+          Diag.powerSaveMode() ? 1 : 0,
+          Diag.backgroundRestricted() ? 1 : 0,
+          "batteryOpt=" + (Diag.ignoresBatteryOptimizations() ? "вимкнено" : "увімкнено"));
+    }
     ensureChannel();
     startInForeground("Очікування сигналу GPS…");
   }
@@ -231,6 +247,7 @@ public final class TrackerService extends Service implements LocationListener {
     PendingIntent pending =
         PendingIntent.getForegroundService(this, 7, restart, PendingIntent.FLAG_IMMUTABLE);
 
+    Diag.event(Diag.TASK_REMOVED, 0, 0, 0, "ставлю будильник на підйом");
     AlarmManager alarms = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
     if (alarms != null) alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 10_000L, pending);
   }
@@ -248,6 +265,7 @@ public final class TrackerService extends Service implements LocationListener {
       stopSelf();
       return START_NOT_STICKY;
     }
+    Diag.event(intent == null ? Diag.STICKY_RESTART : Diag.SERVICE_START, sessionAlive() ? 1 : 0, action == null ? 0 : 1, 0, action);
 
     // Потоки створюємо один раз. Інакше кожен повторний старт (наприклад,
     // після видалення дозволу) лишив би старий HandlerThread живим назавжди.
@@ -361,12 +379,14 @@ private boolean hasFreshFix() {
             quietHits = 0;
             if (++motionHits >= MOTION_HITS && !motionDetected) {
               motionDetected = true;
+              Diag.event(Diag.MOTION_ON, magnitude, 0, 0, "акселерометр");
               onMotionStarted();
             }
           } else {
             motionHits = 0;
             if (motionDetected && ++quietHits >= QUIET_HITS) {
               motionDetected = false;
+              Diag.event(Diag.MOTION_OFF, quietHits, 0, 0, "заспокоївся");
               onMotionStopped();
             }
           }
@@ -444,6 +464,7 @@ private final TriggerEventListener significantListener =
       boolean ok = sensorManager.requestTriggerSensor(significantListener, significantMotion);
       if (!ok) return; // дозволу немає або сенсор недоступний
       significantArmed = true;
+      Diag.event(Diag.SIGMOTION_ARMED, 1, 0, 0, "");
 
       // Пере-реєстрація через 5 хвилин (обхід #259298110)
       if (gpsHandler != null) {
@@ -465,6 +486,7 @@ private final TriggerEventListener significantListener =
           if (significantArmed && sensorManager != null && significantMotion != null) {
             sensorManager.cancelTriggerSensor(significantListener, significantMotion);
             significantArmed = false;
+            Diag.event(Diag.SIGMOTION_REARM, 1, 0, 0, "cancel + повторний запит");
           }
           armSignificantMotion();
         }
@@ -498,6 +520,7 @@ private final TriggerEventListener significantListener =
           motionListener, motionSensor, SensorManager.SENSOR_DELAY_NORMAL, gpsHandler);
       sensorOn = true;
       Log.i(TAG, "акселерометр увімкнено: стежу за рухом");
+      Diag.event(Diag.ACCEL_ON, 1, 0, 0, "");
     } else {
       sensorManager.unregisterListener(motionListener);
       sensorOn = false;
@@ -532,6 +555,9 @@ private final TriggerEventListener significantListener =
 
     requestUpdatesFor(LocationManager.GPS_PROVIDER, prefs.intervalSeconds() * 1000L, 0f);
     gpsActive = true;
+    gpsOnAt = SystemClock.elapsedRealtime();
+    Diag.event(Diag.GPS_ON, prefs.intervalSeconds(), hasFreshFix() ? 1 : 0, lastAcc,
+        hasFreshFix() ? "є свіжа точка" : "фікси немає");
     // Рух триває: продовжуємо стежити за акселерометром, доки він не скінчиться.
     updateMotionSensor();
 
@@ -562,6 +588,8 @@ private final TriggerEventListener significantListener =
     // разом із GPS і в приміщенні ми знову стали б «мовчазними».
     requestNetworkUpdates();
     gpsActive = false;
+    Diag.event(Diag.GPS_OFF, (SystemClock.elapsedRealtime() - gpsOnAt) / 1000.0d, 0, 0,
+        "сплять, стоїмо");
     // Не намагаємося одразу: інакше «стою — вмик — вимк» ганяє GNSS без кінця.
     gpsOffUntil = SystemClock.elapsedRealtime() + GPS_RESUME_DELAY_MS;
     Log.i(TAG, "GPS вимкнено: стоїмо, точка свіжа");
@@ -578,14 +606,21 @@ private final TriggerEventListener significantListener =
   public void onLocationChanged(Location location) {
     // Деякі провайдери (а на Android 16 — і з вагомо) присилають null.
     // Без перевірки це падіння на кожному оновленні, тобто сервіс впаде.
-    if (location == null) return;
+    if (location == null) {
+      Diag.event(Diag.FIX_REJECTED, 0, 0, 0, "location == null");
+      return;
+    }
 
     long now = System.currentTimeMillis();
     long fixTime = adjustedFixTime(location.getTime(), now);
 
     // Точка від пасивного провайдера може бути сирою копією чужої фікса.
     // Вічно «свіжий» час у такій точці змусив би нас думати, що ми рухаємось.
-    if (now - fixTime > MAX_FIX_AGE_MS) return;
+    if (now - fixTime > MAX_FIX_AGE_MS) {
+      Diag.event(Diag.FIX_REJECTED, now - fixTime, 0, location.getAccuracy(),
+          "застаріла: провайдер=" + location.getProvider());
+      return;
+    }
 
     String provider = location.getProvider();
     float incoming = location.hasAccuracy() ? location.getAccuracy() : 9999f;
@@ -599,6 +634,8 @@ private final TriggerEventListener significantListener =
         double meters = metersFrom(location.getLatitude(), location.getLongitude());
         if (meters / seconds > MAX_PLAUSIBLE_SPEED_MS) {
           Log.w(TAG, "неправдоподібна швидкість — точку відкидаю");
+          Diag.event(Diag.FIX_REJECTED, meters / seconds, meters, seconds,
+              "швидкість " + (meters / seconds) + " м/с, провайдер=" + location.getProvider());
           return;
         }
       }
@@ -622,7 +659,14 @@ private final TriggerEventListener significantListener =
     else if (!incomingGood && currentGood) accept = false; // погірше — ігноруємо
     else accept = fresher || muchBetter; // обидві прийнятні — беремо новішу
 
-    if (!accept) return;
+    if (!accept) {
+      Diag.event(Diag.FIX_REJECTED, incoming, lastAcc, fresher ? 1 : 0,
+          "точність гірша, провайдер=" + provider);
+      return;
+    }
+
+    Diag.event(Diag.FIX_ACCEPTED, incoming, location.getTime(), motionDetected ? 1 : 0,
+        "провайдер=" + provider + " свіжість=" + (now - fixTime) + "мс");
 
     lastLat = location.getLatitude();
     lastLon = location.getLongitude();
@@ -697,6 +741,9 @@ private final TriggerEventListener significantListener =
     // Свіжість, а не «фікс був колись». Прапорець haveFix живе вічно, тож
     // на нього спиратися не можна: стара точка — це не поточна позиція.
     if (!hasFreshFix()) {
+      Diag.event(Diag.SKIP_NO_FRESH_FIX, motionDetected ? 1 : 0, haveFix ? 1 : 0,
+          haveFix ? (now - lastFixAt) / 1000.0d : 0,
+          haveFix ? "остання точка " + (now - lastFixAt) / 1000 + " с тому" : "фікси немає взагалі");
       // Немає свіжої точки — не надсилаємо стару, а просимо нову.
       // Без цього телефон просто чекав би на heartbeat, тобто до 30 хвилин.
       startGpsIfWorth();
@@ -704,6 +751,7 @@ private final TriggerEventListener significantListener =
       // Рух ми вже помітили, але GPS ще не встиг: намір «надіслати» не
       // можна втрачати, бо інакше точка піде аж на наступному тіку таймера.
       if (motionDetected && timer != null) {
+        Diag.event(Diag.STALE_RETRY, 1, 0, 0, "чекаю фікса");
         timer.removeCallbacks(motionSendTask);
         timer.postDelayed(motionSendTask, MOTION_RETRY_MS);
       }
@@ -721,6 +769,7 @@ private final TriggerEventListener significantListener =
     if (bypass) {
       lastBypassAt = now;
       watchUntil = SystemClock.elapsedRealtime() + GPS_WATCH_MIN_MS;
+      Diag.event(Diag.BYPASS, now / 60000.0d, 0, 0, "обхід: роблю фікс без руху");
       startGpsIfWorth();
     }
 
@@ -741,10 +790,15 @@ private final TriggerEventListener significantListener =
             || moved >= SEND_MIN_METERS
             || now - lastSentAt >= heartbeatMs;
     if (!send) {
+      Diag.event(Diag.SEND_SKIP, moved, heartbeatMs / 60000.0d, motionDetected ? 1 : 0,
+          "рух=" + moved + " м, heartbeat=" + (heartbeatMs / 60000) + " хв");
       maybeStopGps();
       return;
     }
 
+    Diag.event(Diag.SEND_SKIP, moved, 0, 0,
+        "надсилаю: рух=" + Math.round(moved) + " м, причина="
+            + (motionDetected ? "акселерометр" : moved >= SEND_MIN_METERS ? "відстань" : "heartbeat"));
     inFlight = true;
     final double lat = lastLat;
     final double lon = lastLon;
@@ -769,6 +823,8 @@ private final TriggerEventListener significantListener =
               heartbeatMs = HEARTBEAT_MS;
               prefs.setLastSendError(error);
               Log.w(TAG, "надсилання не вдалося: " + error);
+              Diag.event(Diag.SEND_FAIL, consecutiveFailures, Diag.hasNetwork() ? 1 : 0,
+                  Diag.batteryPercent(), error);
               updateNotification("Не вдалося надіслати: " + error);
               return;
             }
@@ -794,6 +850,8 @@ private final TriggerEventListener significantListener =
                         GPS_WATCH_MIN_MS, prefs.intervalSeconds() * 2000L);
 
             Log.i(TAG, "точку надіслано");
+            Diag.event(Diag.SEND_OK, acc, Diag.hasNetwork() ? 1 : 0, Diag.batteryPercent(),
+                "мусив=" + motionDetected + " fixAge=" + (System.currentTimeMillis() - fixAt) + "мс");
             updateNotification(notificationText(LocationManager.GPS_PROVIDER));
             maybeStopGps();
           }
@@ -903,8 +961,15 @@ private final TriggerEventListener significantListener =
         .build();
   }
 
+  /** Чи сервіс уже жив цієї сесії (0 = тільки що створили). */
+  private boolean sessionAlive() {
+    return gpsThread != null;
+  }
+
   @Override
   public void onDestroy() {
+    Diag.event(Diag.SERVICE_STOP, motionDetected ? 1 : 0, haveFix ? 1 : 0, consecutiveFailures,
+        "gps=" + gpsActive + " fix=" + lastFixAt);
     if (gpsHandler != null) gpsHandler.removeCallbacksAndMessages(null);
     if (timer != null) timer.removeCallbacksAndMessages(null);
     if (gpsThread != null) gpsThread.quitSafely();
@@ -933,6 +998,7 @@ private final TriggerEventListener significantListener =
     // убитий процес лишав би зелену крапку при мертвому надсиланні — саме
     // через це було незрозуміло, надсилає застосунок точки чи ні.
     prefs.setTracking(false);
+    Diag.flush();
     super.onDestroy();
   }
 

@@ -32,3 +32,22 @@ CREATE TABLE IF NOT EXISTS groups (
   gid        TEXT PRIMARY KEY,
   created_at INTEGER NOT NULL
 );
+
+-- Діагностика: технічні події телефона, а не його координати.
+--
+-- Тимчасова таблиця: рядки живуть 48 годин (DIAG_RETENTION_MS) і видаляються
+-- тим самим cron, що й решта. Вмикається користувачем у застосунку, за
+-- замовчуванням не пишеться нічого.
+CREATE TABLE IF NOT EXISTS diag (
+  gid     TEXT NOT NULL,
+  uid     TEXT NOT NULL,
+  session TEXT,           -- ідентифікатор запуску трекера, для групування
+  ts      INTEGER NOT NULL,
+  e       INTEGER NOT NULL, -- код події, див. Diag.java
+  a       REAL,            -- три числа-параметри події
+  b       REAL,
+  c       REAL,
+  s       TEXT             -- короткий текст: причина, провайдер, помилка
+);
+CREATE INDEX IF NOT EXISTS idx_diag_ts ON diag(ts);
+CREATE INDEX IF NOT EXISTS idx_diag_uid ON diag(gid, uid, ts);

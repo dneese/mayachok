@@ -12,7 +12,12 @@ const T = 1750000000000;
 let queries = 0;
 let failNext = 0;
 
+const diagRows = [];
+
 const db = {
+  batch(statements) {
+    return Promise.all(statements.map((s) => s.run()));
+  },
   prepare(sql) {
     let args = [];
     const api = {
@@ -20,6 +25,21 @@ const db = {
       run: async () => {
         queries++;
         if (failNext > 0) { failNext--; throw new Error('D1 недоступний'); }
+
+        if (/INSERT INTO diag/.test(sql)) {
+          diagRows.push({
+            gid: args[0], uid: args[1], session: args[2], ts: args[3],
+            e: args[4], a: args[5], b: args[6], c: args[7], s: args[8],
+          });
+          return { success: true, meta: { changes: 1 } };
+        }
+        if (/DELETE FROM diag/.test(sql)) {
+          const before = diagRows.length;
+          for (let i = diagRows.length - 1; i >= 0; i--) {
+            if (diagRows[i].ts < args[0]) diagRows.splice(i, 1);
+          }
+          return { success: true, meta: { changes: before - diagRows.length } };
+        }
 
         // Точка: один UPSERT із координатами прямо в рядок учасника.
         if (/INSERT INTO users/.test(sql) && /point_ts\)\s*VALUES/i.test(sql)) {
@@ -70,6 +90,13 @@ const db = {
       all: async () => {
         queries++;
         if (failNext > 0) { failNext--; throw new Error('D1 недоступний'); }
+        if (/FROM diag/.test(sql)) {
+          let rows = diagRows.filter((r) => r.gid === args[0]);
+          if (/uid = /.test(sql)) rows = rows.filter((r) => r.uid === args[1]);
+          const limit = /uid = /.test(sql) ? args[2] : args[1];
+          rows = rows.slice(0, Number(limit) || rows.length);
+          return { results: rows.map(({ session, ts, e, a, b, c, s }) => ({ session, ts, e, a, b, c, s })) };
+        }
         if (/FROM users/.test(sql)) {
           return { results: users.filter((u) => u.gid === args[0]).map((u) => ({ ...u, ts: u.point_ts })) };
         }
@@ -181,6 +208,43 @@ const lv = await (await worker.fetch(new Request('https://x/api/leave?code=code0
 check('leave повертає ok', lv.ok, true);
 check('рядок учасника видалено', users.filter((u) => u.uid === 'lost1').length, 0);
 check('з мапи зник (кеш скинуто)', (await group('code0002b')).users.length, 0);
+
+console.log('діагностика:');
+const diagPost = async (events, uid = 'dev1') =>
+  (await worker.fetch(new Request('https://x/api/diag', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: 'code0001a', uid, session: 'sess01', dropped: 0, events }),
+  }), env)).json();
+
+const diagRes = await diagPost([
+  { t: T, e: 1, a: 1, b: 2, c: 3, s: 'старт' },
+  { t: T + 1000, e: 17, a: 5, b: 1, c: 71, s: 'точку надіслано' },
+]);
+check('події прийнято', diagRes.stored, 2);
+check('у базі два рядки', diagRows.length, 2);
+check('текст події збережено', diagRows[1].s, 'точку надіслано');
+check('числа збережено', diagRows[1].c, 71);
+check('сесія збережено', diagRows[0].session, 'sess01');
+
+// ліміт: телефон не має права вичерпати D1 своєю помилкою
+const flood = await diagPost(Array.from({ length: 500 }, (_, i) => ({ t: T + i, e: 13, s: 'ш' })));
+check('запит обмежено 200 рядками', flood.stored, 200);
+check('у базі рівно 200 додано', diagRows.length, 202);
+
+// читання для розробника
+const readBack = await (await worker.fetch(new Request(
+  'https://x/api/diag?code=code0001a&uid=dev1&limit=10'), env)).json();
+check('події читаються назад', readBack.events.length, 10);
+check('читається саме та група', readBack.events[0].e >= 0, true);
+
+// прибирання: через 48 годин від історії не лишається нічого
+const future = Date.now() - 49 * 60 * 60 * 1000;
+diagRows[0].ts = future;
+diagRows[1].ts = future;
+const cleaned = await worker.scheduled({}, env);
+check('стара діагностика видалена', diagRows.length, 0);
+check('cleanup повідомив, скільки видалив', cleaned.deletedDiag, 202);
 
 console.log(`\n  пройдено ${pass}, провалено ${fail}`);
 process.exit(fail ? 1 : 0);

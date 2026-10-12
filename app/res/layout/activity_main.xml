@@ -236,6 +236,44 @@
                     android:text="@string/btn_start" />
             </LinearLayout>
 
+            <!-- Діагностика. За замовчуванням вимкнена: це телеметрія
+                 з чужого телефону, тому вмикається руками. -->
+            <LinearLayout
+                style="@style/Card"
+                android:layout_marginBottom="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:text="@string/label_diag" />
+
+                    <TextView
+                        style="@style/Hint"
+                        android:text="@string/hint_diag" />
+
+                    <TextView
+                        android:id="@+id/diag_state"
+                        style="@style/Hint"
+                        android:textColor="@color/brand"
+                        android:visibility="gone" />
+                </LinearLayout>
+
+                <CheckBox
+                    android:id="@+id/diag"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:contentDescription="@string/label_diag"
+                    android:minWidth="48dp" />
+            </LinearLayout>
+
             <!-- Довідка -->
             <LinearLayout
                 style="@style/Card"
