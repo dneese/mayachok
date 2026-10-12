@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="ru.dneese.mayachok"
-    android:versionCode="8"
-    android:versionName="1.8">
+    android:versionCode="9"
+    android:versionName="1.9">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Тільки для TYPE_SIGNIFICANT_MOTION: дешевшего тригера «людина
+         рухається», який працює в сенсорній мікросхемі. Без нього
+         застосунок просто використовує акселерометр — трохи дорожче,
+         але працює. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <!-- Дозволу на сповіщення немає: єдине сповіщення — технічне, від самого

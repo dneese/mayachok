@@ -37,6 +37,7 @@ import java.util.Locale;
  */
 public final class MainActivity extends Activity {
   private static final int REQ_LOCATION = 10;
+  private static final int REQ_ACTIVITY = 13;
   // Інтервал опитування GPS. 10 секунд прибрано: з порогом 100 м воно
   // лише тримало GPS-модуль увімкненим майже постійно, не додаючи точності.
   private static final int[] INTERVALS = {30, 60, 120, 300};
@@ -730,6 +731,15 @@ public final class MainActivity extends Activity {
       return;
     }
 
+    // Дозвіл на розпізнавання активності потрібен лише для significant motion —
+    // дешевшого тригера руху. Без нього працюємо на акселерометрі, тож
+    // відмова не критична: питаємо один раз і в будь-якому разі стартуємо.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        && !hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)) {
+      requestPermissions(
+          new String[] {Manifest.permission.ACTIVITY_RECOGNITION}, REQ_ACTIVITY);
+    }
+
     Intent service = new Intent(this, TrackerService.class);
     service.setAction("start");
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(service);
@@ -765,5 +775,6 @@ public final class MainActivity extends Activity {
         toast("Без геолокації трекер не працює");
       }
     }
+    // Відмова не ламає нічого: трекер визначатиме рух акселерометром.
   }
 }

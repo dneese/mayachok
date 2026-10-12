@@ -153,6 +153,22 @@ Worker, а запити розсипаються по різних, тому ч�
 вистачало) і 3 зразки поспільки за ~0,6 с. Слухач обов'язково знімається
 в `onDestroy()` — забутий датчик у фоні це постійна витрата.
 
+**Ідеї запозичені з реальних проєктів.** Ключові рішення звірені з джерелками:
+
+| Ідея | Джерело |
+|---|---|
+| `TYPE_SIGNIFICANT_MOTION` замість постійного акселерометра | [GPSLogger](https://github.com/mendhak/gpslogger), [OwnTracks](https://github.com/owntracks/android) |
+| Одноразовий сенсор + cancel/re-register раз на 5 хв | баг [#259298110](https://issuetracker.google.com/issues/259298110), обхід у `GpsLoggingService` |
+| Обхідний інтервал 15 хв, щоб трекер не завмер | GPSLogger `significantMotionBypassInterval` |
+| Швидка перша точка після старту | [Traccar SDK](https://www.traccar.org/traccar-client-sdk/) («fast first fix») |
+| Перезапуск після змаху застосунку | OwnTracks `onTaskRemoved()`, Hauk |
+| Фільтр неправдоподібної швидкості (357 м/с) | GPSLogger; причина — [мультипроміння](https://github.com/mendhak/gpslogger/blob/master/assets/text/faq/faq22-why-gps-jumps.md) |
+| Корекція GPS week rollover | GPSLogger `getLocationAdjustedForGPSWeekRollover`, Traccar `Position.kt` |
+| GNSS→network fallback з таймаутом | [Hauk `LocationPushService`](https://github.com/bilde2910/Hauk) |
+| Трирівнева семантика точності (discard → best-of → accept) | GPSLogger `onLocationChanged` |
+
+Чого свідомо **не** переносили: WakeLock (Traccar має, але з `@SuppressLint("WakelockTimeout")` — вони самі знають, що це небезпечно; foreground service і significant motion дають те саме), `ActivityRecognitionTransitionRequest` (це Google Play Services, а проєкт свідомо без залежностей), `minUpdateDistanceMeters` (Hauk не передає його з конкретної причини — [issue #124](https://github.com/bilde2910/Hauk/issues/124): Android не дає контролю, коли саме прийде наступний fix).
+
 **Екран ніколи не бреше.** `prefs.lastSentAt` і `lastSendError` показують
 реальний стан, а `setTracking(false)` у `onDestroy()` — інакше убитий процес
 лишав би зелену крапку «Трекер працює у фоні» при мертвому надсиланні.

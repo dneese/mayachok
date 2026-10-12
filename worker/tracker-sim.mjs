@@ -22,13 +22,17 @@ const MOTION_ACCEL_MS2 = 0.35;
 const MOTION_HITS = 3;
 const QUIET_HITS = 5;
 const SENSOR_PERIOD_MS = 200;
+// Significant motion: одноразовий тригер, спрацьовує через ~2 с після руху
+// і сам скасовується. Обхід (bypass) раз на 15 хв, якщо руху не було.
+const SIGMOTION_LATENCY_MS = 2000;
+const SIGMOTION_BYPASS_MS = 15 * 60 * 1000;
 
 // GPS
 const GPS_TTFF_MS = 25 * 1000; // холодний старт: «побачити» супутники
 const MOTION_SEND_DELAY_MS = 12 * 1000;
 const MOTION_RETRY_MS = 10 * 1000;
 
-function run({ useAccelerometer, intervalS = 60, walkStartMin = 20, walkMetersPerMin = 70 }) {
+function run({ useAccelerometer, useSignificantMotion = false, intervalS = 60, walkStartMin = 20, walkMetersPerMin = 70 }) {
   let haveFix = false, lastFixAt = 0, lastAcc = 0;
   let haveSent = false, lastSentAt = 0, lastSentMeters = 0;
   let heartbeatMs = HEARTBEAT_MS, watchUntil = 0, gpsOffUntil = 0;
@@ -36,6 +40,9 @@ function run({ useAccelerometer, intervalS = 60, walkStartMin = 20, walkMetersPe
 
   let motionDetected = false, motionHits = 0, quietHits = 0, sensorOn = false;
   let motionSendAt = 0;
+  let sigmotionAt = 0;   // коли тригер спрацює
+  let lastArmAt = -1e9; // коли востаннє перезброїли
+  let lastBypassAt = 0;
 
   const sent = [];
   let firstSendAfterWalk = null;
@@ -61,8 +68,15 @@ function run({ useAccelerometer, intervalS = 60, walkStartMin = 20, walkMetersPe
     gpsActive = false;
     gpsOffUntil = t + GPS_RESUME_DELAY_MS;
   };
-  const syncSensor = () => {
-    sensorOn = !!useAccelerometer;
+  const syncSensor = (t) => {
+    // Якщо доступний significant motion, акселерометр не потрібен.
+    sensorOn = !!useAccelerometer && !useSignificantMotion;
+    // Тригер перезброюємо одразу після спрацювання (він одноразовий).
+    // Ре-реєстрація раз на 5 хв — обхід багу, коли сенсор «залипає».
+    if (useSignificantMotion && sigmotionAt === 0 && t - lastArmAt > 300 * 1000) {
+      sigmotionAt = t + SIGMOTION_LATENCY_MS;
+      lastArmAt = t;
+    }
   };
 
   const doSend = (t) => {
@@ -76,11 +90,21 @@ function run({ useAccelerometer, intervalS = 60, walkStartMin = 20, walkMetersPe
     if (firstSendAfterWalk === null && tMin > walkStartMin) firstSendAfterWalk = tMin;
   };
 
-  syncSensor();
+  syncSensor(0);
   const STEP_MS = 100;
   const END_MIN = 45;
   for (let t = STEP_MS; t <= END_MIN * 60 * 1000; t += STEP_MS) {
     const walking = t / 60000 > walkStartMin;
+
+    // --- significant motion: одноразовий тригер ---
+    if (useSignificantMotion && walking && sigmotionAt && t >= sigmotionAt) {
+      sigmotionAt = 0;
+      motionDetected = true;
+      watchUntil = t + GPS_WATCH_MIN_MS;
+      startGps(t);
+      motionSendAt = t + MOTION_SEND_DELAY_MS;
+      syncSensor(t);
+    }
 
     // --- акселерометр, кожні 200 мс ---
     if (sensorOn && t % SENSOR_PERIOD_MS === 0) {
@@ -117,7 +141,12 @@ function run({ useAccelerometer, intervalS = 60, walkStartMin = 20, walkMetersPe
 
     // --- звичайний таймер ---
     if (t % (intervalS * 1000) !== 0) continue;
+    // Обхід: раз на 15 хв фікс навіть без руху, щоб трекер не завмер.
+    const bypass = t - lastBypassAt >= SIGMOTION_BYPASS_MS;
+    if (bypass && !haveSent) lastBypassAt = t;
+
     startGps(t);
+    syncSensor(t);
 
     if (!hasFreshFix(t)) {
       stopGps(t);
@@ -146,7 +175,13 @@ for (const intervalS of [60, 300]) {
   console.log('Телефон 20 хв лежить на столі, потім людина бере його й іде.\n');
   for (const cfg of [
     { useAccelerometer: false, label: 'лише GPS (1.7.1)', intervalS },
-    { useAccelerometer: true, label: 'GPS + акселерометр (1.8)', intervalS },
+    { useAccelerometer: true, label: 'GPS + акселерометр', intervalS },
+    {
+      useAccelerometer: false,
+      useSignificantMotion: true,
+      label: 'GPS + significant motion (найдешевше)',
+      intervalS,
+    },
   ]) {
     const r = run(cfg);
     console.log(`  ${cfg.label}`);

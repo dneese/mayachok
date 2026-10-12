@@ -1,5 +1,6 @@
 package ru.dneese.mayachok;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -15,6 +16,8 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.hardware.TriggerEvent;
+import android.hardware.TriggerEventListener;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -74,18 +77,18 @@ public final class TrackerService extends Service implements LocationListener {
   // GPS не перезапитуємо частіше за цей час — інакше просто гріємо чіп.
   private static final long GPS_RESUME_DELAY_MS = 60 * 1000L;
 
-  // --- виявлення руху за акселерометром ---
+// --- виявлення руху за акселерометром ---
   //
   // Навіщо, якщо вже є GPS: щоб зрозуміти, що телефон рухається, GPS-фікса
   // не потрібно. GNSS бачить лише наслідок (змінилась координата), а
   // акселерометр — причину. Тому телефон може зрозуміти «людина пішла» ще
-  // тоді, коли супутників немає взагалі (підвал, метро), і одразу ввімкнути
+  // тоді, коли супутників немає взагалі (підвал, метро), і одразу вмикати
   // GPS замість того, щоб чекати на heartbeat.
   //
   // Поріг навмисно такий малий: 0,35 м/с² — це ледь помітне зміщення,
   // набагато менше за крок людини. Щоб струснути стіл не вистачало.
   private static final float MOTION_ACCEL_MS2 = 0.35f;
-  // Стільки Samples поспільшки мають перевищити поріг, щоб вважати рух.
+  // Стільки зразків поспільшки мають перевищити поріг, щоб вважати рух.
   // Фільтр проти одноразових стрибків (стук у двері, автобус на гальмах).
   private static final int MOTION_HITS = 3;
   // А стільки тихих — щоб рух вважався завершеним.
@@ -95,6 +98,38 @@ public final class TrackerService extends Service implements LocationListener {
   private static final long MOTION_SEND_DELAY_MS = 12 * 1000L;
   // Повторна спроба, якщо GPS не встиг на холодному старті.
   private static final long MOTION_RETRY_MS = 10 * 1000L;
+
+  // --- significant motion ---
+  //
+  // TYPE_SIGNIFICANT_MOTION — це не потік даних, а одноразовий сигнал
+  // «людина рухається». Працює він у сенсорній мікросхемі й сам будить
+  // SoC, тож застосунку НЕ потрібен ані wake lock, ані постійне
+  // слухання акселерометра. Норм споживання жорсткий: ≤0,5 мВт у спокої
+  // і ≤1,5 мВт у русі (CDD 7.3).
+  //
+  // Тобто це дешевший за акселерометр спосіб дізнатися про рух.
+  //
+  // Важливо: сенсор одноразовий — після спрацювання Android сам його
+  // скасовує, тому кожен раз треба registering заново.
+  private static final long SIGMOTION_REARM_MS = 5 * 60 * 1000L;
+  // Обхід раз на 15 хвилин: якщо сенсор зрештою залипне (див. обхід нижче)
+  // або ми помилилися з оцінкою нерухомості, трекер не замикається назавжди.
+  private static final long SIGMOTION_BYPASS_MS = 15 * 60 * 1000L;
+
+  // --- фільтри фікса ---
+  //
+  // Швидкість понад 1285 км/год (357 м/с) — це не людина, а мультипроміння:
+  // приймач бачить відбиття сигналу від будинків і вирішує, що супутників
+  // більше, ніж є. GPSLogger відкидає такі точки outright (див. faq22).
+  private static final float MAX_PLAUSIBLE_SPEED_MS = 357f;
+  // GPS week rollover. Лічильник тижнів у навігаційному повідомленні має
+  // лише 10 біт, тобто 1024 тижні ≈ 19,6 року. Старий чіп, у якого не
+  // оновлено прошивку, після rollover віддає час на 1024 тижні в минуле.
+  // Така точка пройшла б у базу як «2012 рік», а наш фільтр свіжості
+  // відкидав би її далі — тобто точок не було б ніколи. Коригуємо.
+  // Останній такий rollover: 6 квітня 2019 (наступний — 2038).
+  private static final long GPS_ROLLOVER_BEFORE_MS = 1554508800000L; // 2019-04-06
+  private static final long GPS_ROLLOVER_OFFSET_MS = 619315200000L; // 1024 тижні
 
   private LocationManager locationManager;
   // GPS-фікси приходять на gpsThread, таймер.sendNow() — на timerThread.
@@ -134,7 +169,9 @@ public final class TrackerService extends Service implements LocationListener {
   // --- акселерометр ---
   private SensorManager sensorManager;
   private Sensor motionSensor; // linear acceleration: без сили тяжіння
+  private Sensor significantMotion; // одноразовий тригер «людина рухається»
   private boolean sensorOn;
+  private boolean significantArmed;
   private int motionHits;
   private int quietHits;
   private volatile boolean motionDetected;
@@ -156,10 +193,46 @@ public final class TrackerService extends Service implements LocationListener {
       // віднімемо гравітацію самі.
       motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
       if (motionSensor == null) motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+      // Significant motion — дешевший тригер руху. Він wake-up: сам будить
+      // SoC, тож не треба ні WakeLock, ні постійно відкритого акселерометра.
+      // getDefaultSensor поверне null, якщо немає дозволу ACTIVITY_RECOGNITION
+      // або такого сенсора на телефоні — тоді лишаємось на акселерометрі.
+      significantMotion = sensorManager.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION);
     }
     if (motionSensor == null) Log.w(TAG, "акселерометра немає — визначатимемо рух лише за GPS");
     ensureChannel();
     startInForeground("Очікування сигналу GPS…");
+  }
+
+  /**
+   * Користувач змахнув застосунок із недавніх.
+   *
+   * На звичайному Android це інформаційний виклик: сервіс працює далі. Але
+   * частина виробників (Samsung, Xiaomi, Huawei) ставиться до змаху як до
+   * примусової зупинки — вбиває процес і викидає START_STICKY-перезапуск.
+   * Тоді трекер мовчить назавжди, поки хтось не відкриє застосунок руками.
+   *
+   * Різниця між OwnTracks і Hauk тут — саме ця помилка: на тих пристроях
+   * це «підключитися за секунди» проти «не підключатися до наступного
+   * відкриття застосунку». Ставимо будильник на 10 секунд, який піднімає
+   * сервіс назад через PendingIntent (foreground service не можна підняти
+   * просто з будильника).
+   */
+  @Override
+  public void onTaskRemoved(Intent rootIntent) {
+    super.onTaskRemoved(rootIntent);
+    if (!prefs.isTracking()) return; // користувач сам зупинив — не воскрешаємо
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+
+    Log.i(TAG, "застосунок змахнули — планую підйом сервіса через 10 с");
+
+    Intent restart = new Intent(this, TrackerService.class);
+    restart.setAction("start");
+    PendingIntent pending =
+        PendingIntent.getForegroundService(this, 7, restart, PendingIntent.FLAG_IMMUTABLE);
+
+    AlarmManager alarms = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+    if (alarms != null) alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 10_000L, pending);
   }
 
   @Override
@@ -196,8 +269,14 @@ public final class TrackerService extends Service implements LocationListener {
       updateMotionSensor();
       scheduleNextSend(0);
     } else if (!timerRunning) {
-      // Сервіс підняли знову (sticky-перезапуск) — таймер уже зупинено,
-      // тож піднімаємо його, не створюючи другого потоку.
+      // Сервіс підняли знову (sticky-перезапуск або змахнули з недавніх) —
+      // таймер уже зупинено, тож піднімаємо його, не створюючи другого потоку.
+      startGpsIfWorth();
+      updateMotionSensor();
+      // Fast first fix (Traccar SDK): при довгому інтервалі чекати на
+      // перший спланований крок — це мовчання одразу після «Почати».
+      // Просимо фікса негайно, щоб людина з'явилася на мапі за секунди.
+      if (timer != null) timer.postDelayed(motionSendTask, MOTION_SEND_DELAY_MS);
       scheduleNextSend(0);
     }
     return START_STICKY;
@@ -329,6 +408,68 @@ private boolean hasFreshFix() {
     Log.i(TAG, "руху немає — телефон лежить");
   }
 
+private final TriggerEventListener significantListener =
+      new TriggerEventListener() {
+        @Override
+        public void onTrigger(TriggerEvent event) {
+          // Спрацював — значить людина рухається. Сенсор після цього
+          // одноразово скасовано системою, тож одразу залипаємо наново.
+          significantArmed = false;
+          Log.i(TAG, "significant motion: людина рухається");
+          onMotionStarted();
+          armSignificantMotion();
+        }
+      };
+
+  /**
+   * Вмикає одноразовий тригер руху.
+   *
+   * Тут дві хитрощі з реальних проєктів:
+   *
+   * 1. Реєструємо ДО перевірки обхідного інтервалу. Якщо перевірити спершу,
+   *    ми втратимо подію, яка сталася рівно в цю мить (так зроблено в
+   *    OwnTracks — коментар «реєстрація перед rate-limit, щоб не загубити
+   *    подію»).
+   *
+   * 2. Кожні 5 хвилин робимо cancel + повторний запит. Відомий баг
+   *    [issuetracker #259298110]: після тривалих періодів без спрацювання
+   *    сенсор перестає реагувати навіть на реальний рух. Обхід саме такий,
+   *    і він працює.
+   */
+  private synchronized void armSignificantMotion() {
+    if (sensorManager == null || significantMotion == null) return;
+    if (significantArmed) return;
+
+    try {
+      boolean ok = sensorManager.requestTriggerSensor(significantListener, significantMotion);
+      if (!ok) return; // дозволу немає або сенсор недоступний
+      significantArmed = true;
+
+      // Пере-реєстрація через 5 хвилин (обхід #259298110)
+      if (gpsHandler != null) {
+        gpsHandler.removeCallbacks(rearmSignificant);
+        gpsHandler.postDelayed(rearmSignificant, SIGMOTION_REARM_MS);
+      }
+    } catch (Exception error) {
+      // SecurityException, якщо немає ACTIVITY_RECOGNITION, — просто
+      // працюємо далі на акселерометрі.
+      Log.w(TAG, "significant motion недоступний: " + error.getMessage());
+      significantMotion = null;
+    }
+  }
+
+  private final Runnable rearmSignificant =
+      new Runnable() {
+        @Override
+        public void run() {
+          if (significantArmed && sensorManager != null && significantMotion != null) {
+            sensorManager.cancelTriggerSensor(significantListener, significantMotion);
+            significantArmed = false;
+          }
+          armSignificantMotion();
+        }
+      };
+
   /**
    * Акселерометр працює весь час, поки ввімкнено трекер.
    *
@@ -338,20 +479,29 @@ private boolean hasFreshFix() {
    * через інтервал (до 5 хвилин). Симуляція (worker/tracker-sim.mjs)
    * дає затримку 22 с проти 300 с саме через це.
    *
-   * Витрата прийнятна: датчик безперервно живить «сенсорна» мікросхема,
-   * тож CPU спить між зразками (200 мс). GNSS, який споживає в рази
-   * більше, завдяки цьому ж і вимикається насправді.
+   * Якщо доступний significant motion, його подія перекриває потребу в
+   * постійному акселерометрі, тож тоді ми його й не вмикаємо.
    */
   private synchronized void updateMotionSensor() {
     if (sensorManager == null || motionSensor == null || gpsHandler == null) return;
-    if (sensorOn) return;
+    armSignificantMotion();
 
-    // SENSOR_DELAY_NORMAL ≈ 200 мс: достатньо, щоб не пропустити початок
-    // ходьби, і дешево — сам датчик працює в сенсорній мікросхемі.
-    sensorManager.registerListener(
-        motionListener, motionSensor, SensorManager.SENSOR_DELAY_NORMAL, gpsHandler);
-    sensorOn = true;
-    Log.i(TAG, "акселерометр увімкнено: стежу за рухом");
+    // Significant motion уже ввімкнений і сам про себе визначає рух.
+    boolean canSkipAccelerometer = significantMotion != null;
+    boolean wanted = !canSkipAccelerometer;
+    if (wanted == sensorOn) return;
+
+    if (wanted) {
+      // SENSOR_DELAY_NORMAL ≈ 200 мс: достатньо, щоб не пропустити початок
+      // ходьби, і дешево — сам датчик працює в сенсорній мікросхемі.
+      sensorManager.registerListener(
+          motionListener, motionSensor, SensorManager.SENSOR_DELAY_NORMAL, gpsHandler);
+      sensorOn = true;
+      Log.i(TAG, "акселерометр увімкнено: стежу за рухом");
+    } else {
+      sensorManager.unregisterListener(motionListener);
+      sensorOn = false;
+    }
   }
 
   /**
@@ -421,17 +571,40 @@ private boolean hasFreshFix() {
   // Пишемо з потоку Api (після відправки) і з потоку GPS (при русі),
   // читаємо з таймера — тому volatile.
   private volatile long watchUntil;
+  // Коли востаннє робили «обхідний» фікс, коли рух не помічено.
+  private long lastBypassAt;
 
   @Override
   public void onLocationChanged(Location location) {
+    // Деякі провайдери (а на Android 16 — і з вагомо) присилають null.
+    // Без перевірки це падіння на кожному оновленні, тобто сервіс впаде.
+    if (location == null) return;
+
     long now = System.currentTimeMillis();
+    long fixTime = adjustedFixTime(location.getTime(), now);
+
     // Точка від пасивного провайдера може бути сирою копією чужої фікса.
     // Вічно «свіжий» час у такій точці змусив би нас думати, що ми рухаємось.
-    if (now - location.getTime() > MAX_FIX_AGE_MS) return;
+    if (now - fixTime > MAX_FIX_AGE_MS) return;
 
     String provider = location.getProvider();
     float incoming = location.hasAccuracy() ? location.getAccuracy() : 9999f;
-    boolean fresher = location.getTime() > lastFixAt;
+
+    // Мультипроміння: приймач вирішує, що супутників більше, ніж є, і
+    // телепортує людину на іншу сторону міста. Швидкість вирахуємо самі —
+    // location.getSpeed() GPSЛамає саме на такому шумі.
+    if (haveFix) {
+      double seconds = (fixTime - lastFixAt) / 1000.0d;
+      if (seconds > 0) {
+        double meters = metersFrom(location.getLatitude(), location.getLongitude());
+        if (meters / seconds > MAX_PLAUSIBLE_SPEED_MS) {
+          Log.w(TAG, "неправдоподібна швидкість — точку відкидаю");
+          return;
+        }
+      }
+    }
+
+    boolean fresher = fixTime > lastFixAt;
     boolean muchBetter = incoming + 100f < lastAcc;
 
     // Обираємо, чи замінювати наявну точку новою.
@@ -454,7 +627,7 @@ private boolean hasFreshFix() {
     lastLat = location.getLatitude();
     lastLon = location.getLongitude();
     lastAcc = incoming;
-    lastFixAt = location.getTime();
+    lastFixAt = fixTime;
     haveFix = true;
 
     updateNotification(notificationText(provider));
@@ -465,6 +638,20 @@ private boolean hasFreshFix() {
       watchUntil = SystemClock.elapsedRealtime() + GPS_WATCH_MIN_MS;
     }
     startGpsIfWorth();
+  }
+
+  /**
+   * Час фікса з поправкою на GPS week rollover.
+   *
+   * Лічильник тижнів у старому навігаційному повідомленні має лише 10 біт,
+   * тобто 1024 тижні ≈ 19,6 року. Чіп зі старою прошивкою після rollover
+   * віддає час на 1024 тижні в минуле. Без поправки така точка або потрапила
+   * б у базу як «2012 рік», або (гірше) назавжди відкидалася б нашим фільтром
+   * свіжості — і точок не було б ніколи.
+   */
+  private static long adjustedFixTime(long reported, long now) {
+    if (reported > 0 && reported < GPS_ROLLOVER_BEFORE_MS) return reported + GPS_ROLLOVER_OFFSET_MS;
+    return reported;
   }
 
   @Override
@@ -522,9 +709,20 @@ private boolean hasFreshFix() {
       }
       return;
     }
-    // Акселерометр працює тільки у вікні очікування, тож на кожному тіку
-    // перевіряємо, чи не час його закрити.
+
+    // Датчики тримаємоarmed завжди, доки ввімкнено трекер.
     updateMotionSensor();
+
+    // Обхід significant motion. Сенсор може злипнути (відомий баг
+    // #259298110), а ми можемо помилитися з оцінкою нерухомості. Тому
+    // раз на 15 хвилин робимо фікс, навіть якщо руху не бачимо — інакше
+    // трекер замикається назавжди. Так само робить GPSLogger.
+    boolean bypass = now - lastBypassAt >= SIGMOTION_BYPASS_MS;
+    if (bypass) {
+      lastBypassAt = now;
+      watchUntil = SystemClock.elapsedRealtime() + GPS_WATCH_MIN_MS;
+      startGpsIfWorth();
+    }
 
     double moved = haveSent ? metersFrom(lastSentLat, lastSentLon) : Double.MAX_VALUE;
 
@@ -719,11 +917,17 @@ private boolean hasFreshFix() {
     // Акселерометр обов'язково знімаємо: забутий слухач датчика — це
     // постійна витрата батареї, поки застосунок у фоні.
     try {
-      if (sensorManager != null) sensorManager.unregisterListener(motionListener);
+      if (sensorManager != null) {
+        sensorManager.unregisterListener(motionListener);
+        if (significantArmed && significantMotion != null) {
+          sensorManager.cancelTriggerSensor(significantListener, significantMotion);
+        }
+      }
     } catch (Exception ignored) {
       // датчик уже відключений
     }
     sensorOn = false;
+    significantArmed = false;
 
     // Екран показує «Трекер активний» саме за цим прапорцем. Без скидання
     // убитий процес лишав би зелену крапку при мертвому надсиланні — саме
