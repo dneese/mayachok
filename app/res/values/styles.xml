@@ -7,33 +7,60 @@
     <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:colorAccent">@color/brand</item>
-        <item name="android:statusBarColor">@color/brand_dark</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">@color/surface</item>
     </style>
 
+    <!-- Апбар: та сама висота, але без рамки — кордон дає лінія під ним. -->
+    <style name="TopBar">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">56dp</item>
+        <item name="android:background">@color/surface</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+    </style>
+
+    <style name="TopTitle">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:gravity">center</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">17sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- Картка: менше рамки, більше повітря, м'якша тінь. -->
     <style name="Card">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:background">@drawable/bg_card</item>
         <item name="android:orientation">vertical</item>
-        <item name="android:padding">16dp</item>
+        <item name="android:padding">18dp</item>
     </style>
 
+    <!-- Заголовок секції: великими літерами, як у сучасних налаштуваннях. -->
     <style name="CardTitle">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">12sp</item>
+        <item name="android:textSize">11sp</item>
         <item name="android:textStyle">bold</item>
-        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:textColor">@color/text_faint</item>
         <item name="android:textAllCaps">true</item>
-        <item name="android:letterSpacing">0.06</item>
+        <item name="android:letterSpacing">0.08</item>
     </style>
 
     <style name="Label">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">13sp</item>
+        <item name="android:textSize">15sp</item>
         <item name="android:textStyle">bold</item>
-        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:textColor">@color/text</item>
     </style>
 
     <style name="Hint">
@@ -48,38 +75,59 @@
     <style name="Field">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">6dp</item>
+        <item name="android:layout_marginTop">8dp</item>
         <item name="android:background">@drawable/bg_input</item>
-        <item name="android:padding">12dp</item>
+        <item name="android:padding">14dp</item>
         <item name="android:textSize">16sp</item>
         <item name="android:textColor">@color/text</item>
         <item name="android:textColorHint">@color/text_faint</item>
+        <item name="android:minHeight">52dp</item>
     </style>
 
-    <!-- primary / secondary / danger: лише фон і колір тексту -->
+    <!-- Основна дія: висока, на всю ширину, з відчуттям натискання. -->
     <style name="Btn">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:minHeight">50dp</item>
+        <item name="android:minHeight">52dp</item>
         <item name="android:background">@drawable/bg_btn_primary</item>
         <item name="android:textColor">@color/on_brand</item>
         <item name="android:textSize">15sp</item>
         <item name="android:textStyle">bold</item>
         <item name="android:stateListAnimator">@null</item>
-        <item name="android:paddingLeft">12dp</item>
-        <item name="android:paddingRight">12dp</item>
+        <item name="android:paddingLeft">16dp</item>
+        <item name="android:paddingRight">16dp</item>
     </style>
 
+    <!-- Другорядна дія: контур замість суцільної заливки. -->
     <style name="Btn.Secondary">
         <item name="android:background">@drawable/bg_btn_secondary</item>
         <item name="android:textColor">@color/text</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textSize">14sp</item>
     </style>
 
     <style name="Btn.Danger">
         <item name="android:background">@drawable/bg_btn_danger</item>
         <item name="android:textColor">@color/danger</item>
-        <item name="android:minHeight">44dp</item>
+        <item name="android:minHeight">48dp</item>
         <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- Чип вибору інтервалу: схожий на вибір у сучасних застосунках. -->
+    <style name="Chip">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">42dp</item>
+        <item name="android:layout_margin">4dp</item>
+        <item name="android:background">@drawable/bg_chip</item>
+        <item name="android:textColor">@color/chip_text</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:paddingLeft">16dp</item>
+        <item name="android:paddingRight">16dp</item>
     </style>
 
     <style name="Link">
@@ -88,6 +136,7 @@
         <item name="android:background">@android:color/transparent</item>
         <item name="android:textColor">@color/brand</item>
         <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
         <item name="android:paddingTop">10dp</item>
         <item name="android:paddingBottom">10dp</item>
         <item name="android:stateListAnimator">@null</item>

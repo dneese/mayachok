@@ -1,33 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="brand">#2563EB</color>
-    <color name="brand_dark">#1D4ED8</color>
-    <color name="brand_faint">#EFF4FF</color>
+    <!-- Палітра: спокійний синій як акцент, зелений лише для стану «працює». -->
+    <color name="brand">#2F6FED</color>
+    <color name="brand_dark">#1B4FD1</color>
+    <color name="brand_faint">#EEF3FF</color>
 
-    <color name="bg">#F4F6FA</color>
+    <color name="bg">#F5F6F8</color>
     <color name="surface">#FFFFFF</color>
-    <color name="divider">#E4E8EF</color>
+    <color name="divider">#E6E8EC</color>
+    <color name="hairline">#EFF1F4</color>
 
-    <color name="text">#111827</color>
-    <color name="text_muted">#6B7280</color>
-    <color name="text_faint">#9CA3AF</color>
+    <color name="text">#101828</color>
+    <color name="text_muted">#667085</color>
+    <color name="text_faint">#98A2B3</color>
 
-    <color name="ok">#16A34A</color>
-    <color name="ok_faint">#DCFCE7</color>
-    <color name="warn">#D97706</color>
-    <color name="danger">#DC2626</color>
+    <color name="ok">#12A150</color>
+    <color name="ok_faint">#E7F6EC</color>
+    <color name="warn">#B54708</color>
+    <color name="warn_faint">#FEF3E6</color>
+    <color name="danger">#D92D20</color>
+    <color name="danger_faint">#FEE9E7</color>
     <color name="on_brand">#FFFFFF</color>
 
-    <!-- Чат у стилі Telegram -->
-    <color name="bubble_out">#2563EB</color>
-    <color name="bubble_out_text">#FFFFFF</color>
-    <color name="bubble_out_meta">#C7DBFF</color>
-    <color name="bubble_in">#FFFFFF</color>
-    <color name="bubble_in_border">#E8EAF0</color>
-    <color name="bubble_in_text">#111827</color>
-    <color name="bubble_in_meta">#8A94A6</color>
-    <color name="date_chip">#D6DEE9</color>
-    <color name="date_chip_text">#3D4657</color>
-
-    <color name="ic_launcher_background">#2563EB</color>
+    <color name="ic_launcher_background">#2F6FED</color>
 </resources>

@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/surface" />
-    <corners android:radius="18dp" />
-    <stroke android:width="1dp" android:color="@color/divider" />
-</shape>
+<!-- Картка без рамки: кордон виглядає важким, тінь відокремлює блок
+     від фону м'якше. Радіус 20dp — як у сучасних застосунках. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/hairline" />
+            <corners android:radius="20dp" />
+            <padding android:left="1dp" android:top="2dp" android:right="1dp" android:bottom="1dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/surface" />
+            <corners android:radius="20dp" />
+        </shape>
+    </item>
+</layer-list>

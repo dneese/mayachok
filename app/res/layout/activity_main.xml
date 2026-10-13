@@ -4,52 +4,49 @@
     android:layout_height="match_parent"
     android:background="@color/bg">
 
-    <!-- Верхній апбар -->
+    <!-- Верхня панель -->
     <LinearLayout
         android:id="@+id/appbar"
-        android:layout_width="match_parent"
-        android:layout_height="?android:attr/actionBarSize"
-        android:background="@color/surface"
-        android:elevation="2dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp">
+        style="@style/TopBar"
+        android:layout_gravity="top"
+        android:elevation="0dp">
 
         <ImageButton
             android:id="@+id/back"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/btn_back"
+            android:padding="11dp"
             android:src="@drawable/ic_back"
             android:visibility="invisible" />
 
         <TextView
             android:id="@+id/title"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:gravity="center"
-            android:maxLines="1"
-            android:text="@string/app_name"
-            android:textColor="@color/text"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            style="@style/TopTitle"
+            android:text="@string/app_name" />
 
         <View
-            android:layout_width="40dp"
-            android:layout_height="40dp" />
+            android:layout_width="44dp"
+            android:layout_height="44dp" />
     </LinearLayout>
+
+    <!-- Тонка лінія під панеллю: відділяє її від контенту без тіні -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_gravity="top"
+        android:layout_marginTop="56dp"
+        android:background="@drawable/bg_appbar_line" />
 
     <!-- Головний екран -->
     <ScrollView
         android:id="@+id/main_panel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="56dp"
-        android:layout_marginTop="?android:attr/actionBarSize"
+        android:layout_marginBottom="64dp"
+        android:layout_marginTop="56dp"
+        android:clipToPadding="false"
         android:fillViewport="true">
 
         <LinearLayout
@@ -58,34 +55,53 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- Стан -->
+            <!-- Стан: найважливіше на екрані, тому банер над усіма -->
             <LinearLayout
-                style="@style/Card"
-                android:layout_marginBottom="12dp"
-                android:orientation="horizontal">
+                android:id="@+id/status_banner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_status_banner"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="16dp">
 
-                <ImageView
+                <View
                     android:id="@+id/status_dot"
-                    android:layout_width="10dp"
-                    android:layout_height="10dp"
-                    android:layout_marginTop="5dp"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:layout_marginEnd="12dp"
                     android:background="@drawable/bg_status_dot"
                     android:contentDescription="@null" />
 
-                <TextView
-                    android:id="@+id/status"
+                <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
                     android:layout_weight="1"
-                    android:textColor="@color/text"
-                    android:textSize="14sp" />
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/text"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/status_detail"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textColor="@color/text_muted"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+                </LinearLayout>
             </LinearLayout>
 
-            <!-- 1. Ім'я -->
+            <!-- 1. Хто я -->
             <LinearLayout
                 style="@style/Card"
-                android:layout_marginBottom="12dp">
+                android:layout_marginTop="14dp">
 
                 <TextView
                     style="@style/CardTitle"
@@ -102,145 +118,150 @@
 
             <!-- 2. Група -->
             <LinearLayout
+                android:id="@+id/group_empty"
                 style="@style/Card"
-                android:layout_marginBottom="12dp">
+                android:layout_marginTop="14dp">
 
                 <TextView
                     style="@style/CardTitle"
                     android:text="@string/label_group" />
 
-                <!-- ще немає групи -->
-                <LinearLayout
-                    android:id="@+id/group_empty"
+                <TextView
+                    style="@style/Hint"
+                    android:text="@string/hint_group_new" />
+
+                <Button
+                    android:id="@+id/create"
+                    style="@style/Btn"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/btn_create_group" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="22dp"
+                    android:layout_marginBottom="4dp"
+                    android:background="@color/hairline" />
+
+                <TextView
+                    style="@style/Hint"
+                    android:text="@string/hint_group_join" />
+
+                <EditText
+                    android:id="@+id/code"
+                    style="@style/Field"
+                    android:hint="@string/hint_code"
+                    android:importantForAutofill="no"
+                    android:inputType="textUri|textNoSuggestions"
+                    android:maxLines="2" />
+
+                <Button
+                    android:id="@+id/join"
+                    style="@style/Btn.Secondary"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/btn_join_group" />
+            </LinearLayout>
+
+            <!-- група вже є -->
+            <LinearLayout
+                android:id="@+id/group_ready"
+                style="@style/Card"
+                android:layout_marginTop="14dp"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/CardTitle"
+                    android:text="@string/label_group" />
+
+                <TextView
+                    android:id="@+id/code_value"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:orientation="vertical">
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/bg_code"
+                    android:padding="16dp"
+                    android:textColor="@color/brand"
+                    android:textSize="14sp"
+                    android:textIsSelectable="true" />
 
-                    <TextView
-                        style="@style/Hint"
-                        android:text="@string/hint_group_new" />
-
-                    <Button
-                        android:id="@+id/create"
-                        style="@style/Btn"
-                        android:layout_marginTop="12dp"
-                        android:text="@string/btn_create_group" />
-
-                    <TextView
-                        style="@style/Hint"
-                        android:layout_marginTop="18dp"
-                        android:text="@string/hint_group_join" />
-
-                    <EditText
-                        android:id="@+id/code"
-                        style="@style/Field"
-                        android:hint="@string/hint_code"
-                        android:importantForAutofill="no"
-                        android:inputType="textUri|textNoSuggestions"
-                        android:maxLines="3" />
-
-                    <Button
-                        android:id="@+id/join"
-                        style="@style/Btn.Secondary"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/btn_join_group" />
-                </LinearLayout>
-
-                <!-- група є -->
                 <LinearLayout
-                    android:id="@+id/group_ready"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:id="@+id/code_value"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/bg_card_brand"
-                        android:padding="12dp"
-                        android:textColor="@color/brand"
-                        android:textIsSelectable="true"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        style="@style/Hint"
-                        android:text="@string/hint_code_share" />
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal">
 
                     <Button
                         android:id="@+id/share"
-                        style="@style/Btn"
-                        android:layout_marginTop="12dp"
+                        style="@style/Btn.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="6dp"
+                        android:layout_weight="1"
+                        android:drawableStart="@drawable/ic_share"
+                        android:drawablePadding="6dp"
                         android:text="@string/btn_share" />
 
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:orientation="horizontal">
-
-                        <Button
-                            android:id="@+id/copy"
-                            style="@style/Btn.Secondary"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginEnd="8dp"
-                            android:layout_weight="1"
-                            android:drawableStart="@drawable/ic_copy"
-                            android:drawablePadding="4dp"
-                            android:text="@string/btn_copy_link" />
-
-                        <Button
-                            android:id="@+id/map"
-                            style="@style/Btn.Secondary"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="@string/btn_map" />
-
-                    </LinearLayout>
-
                     <Button
-                        android:id="@+id/forget"
-                        style="@style/Btn.Danger"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/btn_forget" />
+                        android:id="@+id/copy"
+                        style="@style/Btn.Secondary"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="6dp"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:drawableStart="@drawable/ic_copy"
+                        android:drawablePadding="6dp"
+                        android:text="@string/btn_copy_link" />
                 </LinearLayout>
+
+                <Button
+                    android:id="@+id/map"
+                    style="@style/Btn.Secondary"
+                    android:layout_marginTop="6dp"
+                    android:text="@string/btn_map" />
+
+                <Button
+                    android:id="@+id/forget"
+                    style="@style/Btn.Danger"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/btn_forget" />
             </LinearLayout>
 
             <!-- 3. Трекер -->
             <LinearLayout
                 style="@style/Card"
-                android:layout_marginBottom="12dp">
+                android:layout_marginTop="14dp">
 
                 <TextView
                     style="@style/CardTitle"
                     android:text="@string/label_interval" />
 
-                <Spinner
-                    android:id="@+id/interval"
+                <!-- Інтервал — чипами: видно всі варіанти й активний
+                     одночасно, на відміну від випадного дляга, який
+                     треба відкривати й закривати, щоб побачити значення. -->
+                <LinearLayout
+                    android:id="@+id/chips"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp" />
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal" />
 
                 <TextView
+                    android:id="@+id/note_battery"
                     style="@style/Hint"
                     android:text="@string/note_battery" />
 
                 <Button
                     android:id="@+id/toggle"
                     style="@style/Btn"
-                    android:layout_marginTop="12dp"
+                    android:layout_marginTop="18dp"
                     android:text="@string/btn_start" />
             </LinearLayout>
 
-            <!-- Діагностика. За замовчуванням вимкнена: це телеметрія
-                 з чужого телефону, тому вмикається руками. -->
+            <!-- 4. Діагностика: не окремою карткою, а рядком у налаштуваннях -->
             <LinearLayout
                 style="@style/Card"
-                android:layout_marginBottom="12dp"
+                android:layout_marginTop="14dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
@@ -251,7 +272,7 @@
                     android:orientation="vertical">
 
                     <TextView
-                        style="@style/CardTitle"
+                        style="@style/Label"
                         android:text="@string/label_diag" />
 
                     <TextView
@@ -261,7 +282,7 @@
                     <TextView
                         android:id="@+id/diag_state"
                         style="@style/Hint"
-                        android:textColor="@color/brand"
+                        android:textColor="@color/warn"
                         android:visibility="gone" />
                 </LinearLayout>
 
@@ -269,14 +290,15 @@
                     android:id="@+id/diag"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:layout_marginStart="12dp"
                     android:contentDescription="@string/label_diag"
                     android:minWidth="48dp" />
             </LinearLayout>
 
-            <!-- Довідка -->
+            <!-- 5. Довідка -->
             <LinearLayout
                 style="@style/Card"
+                android:layout_marginTop="14dp"
                 android:layout_marginBottom="8dp">
 
                 <TextView
@@ -287,22 +309,11 @@
                     style="@style/Hint"
                     android:text="@string/hint_help" />
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:orientation="horizontal">
-
-                    <!-- Прямого посилання на APK тут немає свідомо:
-                         застосунок веде на сторінку проєкту, де в README
-                         лежить посилання на останню версію. -->
-                    <Button
-                        android:id="@+id/github"
-                        style="@style/Btn.Secondary"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/btn_github" />
-                </LinearLayout>
+                <Button
+                    android:id="@+id/github"
+                    style="@style/Btn.Secondary"
+                    android:layout_marginTop="14dp"
+                    android:text="@string/btn_github" />
             </LinearLayout>
         </LinearLayout>
     </ScrollView>
@@ -312,8 +323,8 @@
         android:id="@+id/map_panel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginTop="?android:attr/actionBarSize"
-        android:layout_marginBottom="56dp"
+        android:layout_marginBottom="64dp"
+        android:layout_marginTop="56dp"
         android:orientation="vertical"
         android:visibility="gone">
 
@@ -329,28 +340,32 @@
     <LinearLayout
         android:id="@+id/bottom_nav"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="64dp"
         android:layout_gravity="bottom"
         android:background="@color/surface"
-        android:elevation="8dp"
+        android:elevation="12dp"
         android:gravity="center"
         android:orientation="horizontal"
-        android:paddingStart="4dp"
-        android:paddingEnd="4dp">
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
 
         <LinearLayout
             android:id="@+id/tab_group"
             android:layout_width="0dp"
             android:layout_height="match_parent"
+            android:layout_marginEnd="6dp"
             android:layout_weight="1"
             android:background="@drawable/bg_tab"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingTop="4dp">
+            android:paddingTop="6dp">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:id="@+id/tab_group_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:contentDescription="@null"
                 android:src="@drawable/ic_tab_group" />
 
@@ -360,7 +375,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/tab_group"
-                android:textColor="@color/text"
+                android:textColor="@color/text_muted"
                 android:textSize="11sp"
                 android:textStyle="bold" />
         </LinearLayout>
@@ -369,15 +384,17 @@
             android:id="@+id/tab_map"
             android:layout_width="0dp"
             android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
             android:layout_weight="1"
             android:background="@drawable/bg_tab"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingTop="4dp">
+            android:paddingTop="6dp">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:id="@+id/tab_map_icon"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
                 android:contentDescription="@null"
                 android:src="@drawable/ic_tab_map" />
 
@@ -387,10 +404,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:text="@string/tab_map"
-                android:textColor="@color/text"
+                android:textColor="@color/text_muted"
                 android:textSize="11sp"
                 android:textStyle="bold" />
         </LinearLayout>
-
     </LinearLayout>
 </FrameLayout>

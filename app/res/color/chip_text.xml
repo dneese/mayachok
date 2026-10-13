@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Колір чипа міняється разом із фоном: на синьому — білий. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_selected="true" android:color="@color/on_brand" />
+    <item android:color="@color/text_muted" />
+</selector>

@@ -18,6 +18,11 @@ const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
 // щохвилини після 15, хоча ми точно знаємо, де вона.
 const FRESH_MINUTES = 30;
 const MAX_NAME_LEN = 24;
+// Швидкість, вище якої точка фізично неможлива.
+// 1000 м/с = 3600 км/год — це вище швидкості будь-якого літака, тож
+// справжню поїздку Guard не зачепить. Але стрибок на інший континент
+// за лічильники секунд він зупинить.
+const MAX_IMPLAUSIBLE_SPEED_MS = 1000;
 // Діагностика живе два дні й зникає сама. Коротко тому, що це телеметрія
 // з чужого телефону: навіть якщо про неї забудуть, вона не накопичиться.
 const DIAG_RETENTION_MS = 48 * 60 * 60 * 1000;
@@ -85,7 +90,7 @@ const WRITE_MIN_GAP_MS = 8000; // менше 8 секунд між точкам�
 // Надійний сигнал про наближення ліміту дає сам Cloudflare: лимит D1
 // приходить поштою, а метрики — у розділі D1 → Metrics → Row Metrics.
 // Тримаємо лічильники як підказку «щось тут відбулося», а не як охорону.
-const meters = { writes: 0, throttled: 0, cacheHits: 0, dbErrors: 0 };
+const meters = { writes: 0, throttled: 0, rejected: 0, cacheHits: 0, dbErrors: 0 };
 
 function rateLimited(uid) {
   const last = writeGuard.get(uid);
@@ -147,6 +152,16 @@ async function groupIdFor(code) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
   return hex.slice(0, 16);
+}
+
+/** Груба відстань у метрах — для перевірки стрибка точності не потрібно. */
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
 function isFiniteNumber(value, min, max) {
@@ -280,6 +295,39 @@ async function handleIngest(request, db) {
   }
 
   const uid = await upsertUser(db, gid, requested, params.get('name'));
+
+  // Захист від неможливого стрибка. Рахуємо на СЕРВЕРНОМУ часі: телефон
+  // може надіслати будь-який час у тілі запиту, а ми вже обрізали ts до now
+  // вище. Саме через це вдалося зловити інцидент, коли телефон приніс точку
+  // з часом на 514 днів уперед, застосунок «замерз» на ній, а родина чотири
+  // години бачила людину в Перу.
+  //
+  // Важливо: last_seen все одно оновлюємо. Людина може бути в дорозі, і
+  // «щось пішло не так» не означає «не справжня людина».
+  const previous = await db
+    .prepare('SELECT lat, lon, point_ts FROM users WHERE gid = ?1 AND uid = ?2')
+    .bind(gid, uid)
+    .first();
+
+  if (previous && previous.lat != null && previous.point_ts) {
+    const seconds = (Date.now() - Number(previous.point_ts)) / 1000;
+    if (seconds > 0) {
+      // Називаємо не meters: глобальний лічильник має те саме ім'я, і
+      // локальна змінна його перекривала б (через що лічильник падав).
+      const jump = distanceMeters(
+        Number(previous.lat), Number(previous.lon), Number(lat), Number(lon),
+      );
+      const speed = jump / seconds;
+      if (speed > MAX_IMPLAUSIBLE_SPEED_MS) {
+        meters.rejected++;
+        return json({
+          ok: false,
+          error: 'implausible speed',
+          speed: Math.round(speed),
+        });
+      }
+    }
+  }
 
   // Остання точка пишеться в рядок учасника, а не в журнал. Так база не
   // росте від часу: одна людина = один рядок назавжди, а не 2880 на добу.

@@ -76,6 +76,10 @@ const db = {
       first: async () => {
         queries++;
         if (failNext > 0) { failNext--; throw new Error('D1 недоступний'); }
+        if (/SELECT lat, lon, point_ts/.test(sql)) {
+          const f = users.find((u) => u.gid === args[0] && u.uid === args[1]);
+          return f ? { lat: f.lat, lon: f.lon, point_ts: f.point_ts } : null;
+        }
         if (/SELECT last_seen FROM users/.test(sql)) {
           const f = users.find((u) => u.gid === args[0] && u.uid === args[1]);
           return f ? { last_seen: f.last_seen } : null;
@@ -125,15 +129,17 @@ await ingest('code0001a', 'dev1', 49.84, 24.03, T);
 check('точка прийнята', users.find((u) => u.uid === 'dev1').lat, 49.84);
 check('час точки записано', users.find((u) => u.uid === 'dev1').point_ts, T);
 
-// Головне про базу: раніше на одну точку йшли чотири походи
-// (upsert → SELECT last_seen → INSERT/UPDATE → SELECT name → UPDATE coords).
-// Ліміт D1 спільний на всі запити, тож кожен зайвий прохід — це гроші.
-// Тепер точку пише один UPSERT.
+// Ліміт D1 спільний на всі запити, тож кожен прохід у базу — це гроші.
+// Було п'ять (upsert, SELECT last_seen, INSERT, SELECT name, UPDATE coords).
+// Стало чотири: три — запис точки й upsert учасника, четвертий — читання
+// попередньої точки для перевірки неможливого стрибка. Цей прохід важливіший
+// за інші три разом: без нього одна фікса з майбутнім часом заморозила
+// трекер на чужій точці на години (інцидент із Перу).
 // Рахуємо на першій точці нового uid: повторний ingest того ж uid
 // відсікає рейт-ліміт (8 секунд реального часу), тож лічильник був би 0.
 queries = 0;
 await ingest('code0001a', 'fresh1', 49.841, 24.031, T + 60_000);
-check('точка пишеться трьома проходами, а не п\'ятьма', queries, 3);
+check('точка пишеться чотирьома проходами', queries, 4);
 check('координата записана', users.find((u) => u.uid === 'fresh1').lat, 49.841);
 
 // Друга людина: рейт-ліміт рахує реальний час, а тест усі запити робить
@@ -208,6 +214,24 @@ const lv = await (await worker.fetch(new Request('https://x/api/leave?code=code0
 check('leave повертає ok', lv.ok, true);
 check('рядок учасника видалено', users.filter((u) => u.uid === 'lost1').length, 0);
 check('з мапи зник (кеш скинуто)', (await group('code0002b')).users.length, 0);
+
+console.log('стрибок на інший континент (знайдено в родині: Львів → Перу):');
+{
+  await ingest('codejump1', 'jumper', 49.83, 24.02, Date.now());
+  // Чекаємо, поки мине рейт-ліміт (8 с), інакше другий запит відсіється
+  // ним і до перевірки стрибка не дійде.
+  await sleep(8200);
+  // Стрибок у Перу. Такої швидкості не існує.
+  const res = await (await worker.fetch(new Request(
+    `https://x/api/ingest?code=codejump1&uid=jumper&lat=-12.05&lon=-77.04&t=${Date.now()}`), env)).json();
+  check('неможливий стрибок відхилено', res.ok, false);
+  check('причина зрозуміла', res.error, 'implausible speed');
+  check('позиція лишилась попередньою',
+    users.find((u) => u.uid === 'jumper').lat, 49.83);
+  // А справжній переїзд — ні: Львів → Київ за годину.
+  const ok = await ingest('codejump1', 'jumper2', 50.45, 30.52, Date.now());
+  check('реальний учасник проходить', ok.ok, true);
+}
 
 console.log('час із майбутнього (знайдено в родині: +514 днів):');
 {

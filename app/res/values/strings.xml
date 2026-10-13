@@ -3,43 +3,45 @@
     <string name="app_name">Маячок</string>
 
     <!-- стан -->
-    <string name="status_no_group">Спершу створіть групу або введіть код</string>
+    <string name="status_no_group">Спершу створіть групу</string>
     <string name="status_ready">Готово — натисніть «Почати»</string>
-    <string name="status_on">Трекер працює у фоні</string>
+    <string name="status_on">Трекер працює</string>
+    <string name="status_searching">Шукаю сигнал GPS…</string>
+    <string name="status_gps_off">GPS вимкнено в телефоні</string>
+    <string name="status_send_failed">Не вдалося надіслати</string>
 
     <!-- 1. хто я -->
-    <string name="label_name">1. Ваше ім\'я</string>
+    <string name="label_name">Ваше ім\'я</string>
     <string name="hint_name">Наприклад Олена</string>
 
     <!-- 2. група -->
-    <string name="label_group">2. Група</string>
+    <string name="label_group">Група</string>
     <string name="hint_group_new">Створіть нову групу й надішліть посилання родичі чи друзям.</string>
     <string name="btn_create_group">Створити групу</string>
     <string name="hint_group_join">Або вставте посилання, яке вам надіслали:</string>
     <string name="hint_code">https://…</string>
     <string name="btn_join_group">Приєднатися</string>
-    <string name="hint_code_share">Скопіюйте посилання й надішліть. Той, хто його відкриє, потрапить у групу автоматично.</string>
-    <string name="btn_share">Поділитися посиланням</string>
-    <string name="btn_copy_link">Скопіювати посилання</string>
-    <string name="btn_map">Мапа</string>
+    <string name="btn_share">Поділитися</string>
+    <string name="btn_copy_link">Копіювати</string>
+    <string name="btn_map">Відкрити мапу</string>
     <string name="btn_back">Назад</string>
     <string name="btn_forget">Вийти з групи</string>
     <string name="forget_confirm">Вийти з групи? Трекер зупиниться, а інші побачать, що вас більше немає на карті. Код групи буде забуто.</string>
 
     <!-- 3. трекер -->
-    <string name="label_interval">3. Як часто надсилати</string>
-    <string name="note_battery">Частіше — точніше, але швидше сідає батарея.</string>
+    <string name="label_interval">Як часто надсилати</string>
+    <string name="note_battery">Частіше — точніше, але швидше сідає батарея. Поки трекер увімкнено, GPS працює весь час.</string>
     <string name="btn_start">Почати</string>
     <string name="btn_stop">Зупинити</string>
 
-    <!-- 4. діагностика -->
+    <!-- діагностика -->
     <string name="label_diag">Діагностика</string>
-    <string name="hint_diag">Надсилати технічні журнали, щоб допомогти знайти причину, якщо точки не йдуть. Координат не містить, зникає через 48 годин.</string>
+    <string name="hint_diag">Технічні журнали, якщо точки не йдуть. Координат не містить, зникає через 48 годин.</string>
     <string name="diag_battery_hint">Якщо Android зупиняє застосунок у фоні, точки не йдуть. Найчастіше допомагає вимкнути оптимізацію батареї для «Маячка» і вимкнути режим енергозбереження.</string>
     <string name="diag_open_settings">Відкрити налаштування</string>
 
-    <!-- 5. довідка -->
-    <string name="label_help">5. Довідка</string>
+    <!-- довідка -->
+    <string name="label_help">Довідка</string>
     <string name="hint_help">Всім у групі видно одне одного. Точка не зникає: якщо людина давно онлайн, видно, де вона востаннє була.</string>
     <string name="btn_github">Проєкт</string>
 
@@ -51,4 +53,12 @@
     <string name="map_error">Не вдалося завантажити мапу</string>
     <string name="map_retry">Спробувати ще раз</string>
     <string name="map_hint">Потрібен інтернет. Мапа з\'явиться тут, не відкриваючи браузер.</string>
+
+    <!-- інтервали -->
+    <string name="interval_30">30 с</string>
+    <string name="interval_60">1 хв</string>
+    <string name="interval_120">2 хв</string>
+    <string name="interval_300">5 хв</string>
+    <string name="interval_600">10 хв</string>
+    <string name="interval_900">15 хв</string>
 </resources>
