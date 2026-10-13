@@ -31,9 +31,17 @@ public final class BootReceiver extends BroadcastReceiver {
     }
 
     Prefs prefs = new Prefs(context);
-    if (!prefs.configured() || !prefs.isTracking()) return;
+    // Діагностику приєднуємо одразу: після перезавантаження це єдина точка,
+    // де ми взагалі можемо записати, що будильник спрацював. Інакше рішення
+    // «підняти чи ні» лишається абсолютно невидимим для діагностики.
+    Diag.attach(context);
+    if (!prefs.configured() || !prefs.isTracking()) {
+      Diag.event(Diag.SERVICE_START, 0, 0, 0, "boot: пропускаю — трекінг вимкнено");
+      return;
+    }
 
     Log.i(TAG, "запуск після перезавантаження: піднімаю трекер");
+    Diag.event(Diag.SERVICE_START, 0, 0, 0, "boot: піднімаю трекер");
 
     Intent service = new Intent(context, TrackerService.class);
     service.setAction("start");
@@ -44,6 +52,7 @@ public final class BootReceiver extends BroadcastReceiver {
       // Android 12+ не дає піднімати foreground-сервіс із фону так просто.
       // Тоді не втрачаємо надсилання, а лише відкладаємо до відкриття.
       Log.w(TAG, "не вдалося підняти сервіс: " + error.getMessage());
+      Diag.event(Diag.SERVICE_START, 0, 0, 0, "boot: старт не вдався: " + error.getMessage());
     }
   }
 }

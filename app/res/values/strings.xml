@@ -9,6 +9,7 @@
     <string name="status_searching">Шукаю сигнал GPS…</string>
     <string name="status_gps_off">GPS вимкнено в телефоні</string>
     <string name="status_send_failed">Не вдалося надіслати</string>
+    <string name="boot_failed_hint">Телефон не дав запуститися трекеру у фоні. Відкрийте Маячок і дайте геолокації дозвіл «Увесь час» — тоді він підніматиметься сам.</string>
 
     <!-- 1. хто я -->
     <string name="label_name">Ваше ім\'я</string>
@@ -39,6 +40,7 @@
     <string name="hint_diag">Технічні журнали, якщо точки не йдуть. Координат не містить, зникає через 48 годин.</string>
     <string name="diag_battery_hint">Якщо Android зупиняє застосунок у фоні, точки не йдуть. Найчастіше допомагає вимкнути оптимізацію батареї для «Маячка» і вимкнути режим енергозбереження.</string>
     <string name="diag_open_settings">Відкрити налаштування</string>
+    <string name="diag_bg_hint">«Увесь час» не надано — після перезавантаження трекер не підніметься сам. Це в налаштуваннях → Геолокація → «Дозволити увесь час».</string>
 
     <!-- довідка -->
     <string name="label_help">Довідка</string>

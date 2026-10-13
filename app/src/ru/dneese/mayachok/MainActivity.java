@@ -424,6 +424,12 @@ public final class MainActivity extends Activity {
   @Override
   protected void onResume() {
     super.onResume();
+    // Самовідновлення: користувач відкрив застосунок, а сервіс мертвий
+    // (вбив процес, не зміг піднятися з фону). Відкрите з екрана — це
+    // дозволений контекст, і трекер оживає без жодного «Почати».
+    if (prefs.configured() && isTracking() && !TrackerService.running) {
+      startServiceIntent();
+    }
     render();
     if (currentTab == TAB_MAP) {
       mapView.resumeTimers();
@@ -637,7 +643,15 @@ public final class MainActivity extends Activity {
 
     diagBox.setChecked(prefs.diagnostics());
     diagBox.setEnabled(hasGroup);
-    if (hasGroup && prefs.diagnostics() && !Diag.ignoresBatteryOptimizations()) {
+    boolean bgMissing =
+        hasGroup
+            && tracking
+            && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+            && !hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION);
+    if (bgMissing) {
+      diagState.setVisibility(View.VISIBLE);
+      diagState.setText(R.string.diag_bg_hint);
+    } else if (hasGroup && prefs.diagnostics() && !Diag.ignoresBatteryOptimizations()) {
       diagState.setVisibility(View.VISIBLE);
       diagState.setText("Оптимізацію батареї не вимкнено — точки можуть не йти");
     } else {

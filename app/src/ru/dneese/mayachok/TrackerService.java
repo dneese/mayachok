@@ -45,6 +45,9 @@ public final class TrackerService extends Service implements LocationListener {
   private static final String CHANNEL_ID = "gps_tracking";
   private static final int NOTIFICATION_ID = 42;
 
+  /** Чи сервіс живий зараз. MainActivity читає це, щоб самовідновитись при відкритті. */
+  public static volatile boolean running = false;
+
   // Фікса не може бути в майбутньому.
   //
   // Не абстракція: реально телефон віддав точку з часом на 514 днів уперед.
@@ -83,19 +86,35 @@ public final class TrackerService extends Service implements LocationListener {
     prefs = new Prefs(this);
     locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
     ensureChannel();
-    // Якщо піднятися у фоні не вдалося (немає ACCESS_BACKGROUND_LOCATION на
-    // Android 14+), startForeground кидає SecurityException. Без цієї обробки
-    // процес падав би, а користувач бачив би лише «трекер не працює».
+    // Діагностику приєднуємо й тут, а не лише в MainActivity: після
+    // перезавантаження процес піднімає сервіс без жодної Activity, і без цього
+    // дзвінка всі події рестарту мовчазно губилися. Саме ця тиша не давала нам
+    // побачити, чому телефон не встав після ребута.
+    Diag.attach(this);
+    // Підйом із фону (перезавантаження, змах) на Android 12+ без
+    // ACCESS_BACKGROUND_LOCATION кидає SecurityException у startForeground.
+    // Ловимо тут, але НЕ скидаємо tracking: це означало б «користувач вимкнув
+    // трекер», і наступне перезавантаження BootReceiver навіть не спробував би.
     if (!startInForeground(getString(R.string.status_searching))) {
-      Diag.event(Diag.SERVICE_START, 0, 0, 0, "не вдалося стати foreground");
-      prefs.setTracking(false);
+      Diag.event(Diag.SERVICE_START, 0, 0, 0, "foreground не вдався — підйом із фону");
+      notifyBootFailed();
+      prefs.setLastSendError(getString(R.string.boot_failed_hint));
       stopSelf();
+      return;
     }
+    running = true;
+    cancelBootFailedNotification();
   }
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
     String action = intent == null ? null : intent.getAction();
+    if (!running) {
+      // Сервіс уже зупинявся в onCreate (не зміг стати foreground). Не
+      // продовжуємо роботу без сповіщення — інакше Android уб'є процес сам,
+      // а трекер мовчав би невідомо чому.
+      return START_NOT_STICKY;
+    }
     if ("stop".equals(action)) {
       prefs.setTracking(false);
       stopSelf();
@@ -321,6 +340,32 @@ public final class TrackerService extends Service implements LocationListener {
     if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification(text));
   }
 
+  /**
+   * Підйом із фону не вдався (немає ACCESS_BACKGROUND_LOCATION). Не вмираємо
+   * мовчки: попереджаємо користувача, щоб відкрив застосунок — наступного
+   * разу старт піде вже з активного екрана, а коли дозвіл з'явиться — і з фону.
+   */
+  private void notifyBootFailed() {
+    try {
+      NotificationManager manager =
+          (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+      if (manager == null) return;
+      manager.notify(NOTIFICATION_ID + 1, buildNotification(getString(R.string.boot_failed_hint)));
+    } catch (Exception ignored) {
+      // Сповіщення — лише підказка; без нього живемо.
+    }
+  }
+
+  private void cancelBootFailedNotification() {
+    try {
+      NotificationManager manager =
+          (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+      if (manager != null) manager.cancel(NOTIFICATION_ID + 1);
+    } catch (Exception ignored) {
+      // Немає менеджера — нема й сповіщення.
+    }
+  }
+
   private Notification buildNotification(String text) {
     Intent open = new Intent(this, MainActivity.class);
     open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -375,6 +420,7 @@ public final class TrackerService extends Service implements LocationListener {
 
   @Override
   public void onDestroy() {
+    running = false;
     if (handler != null) handler.removeCallbacksAndMessages(null);
     if (workerThread != null) workerThread.quitSafely();
     try {
