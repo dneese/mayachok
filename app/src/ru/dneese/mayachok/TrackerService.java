@@ -51,10 +51,14 @@ public final class TrackerService extends Service implements LocationListener {
   // Старий код перевіряв лише застарілі точки, така пройшла, lastFixAt
   // став майбутнім — і далі всі справжні точки відкидалися як «не новіші».
   private static final long MAX_FIX_FUTURE_MS = 2 * 60 * 1000L;
-  // Застарілу фікса не надсилаємо: щоб на карті не було позавчорашньої
-  // точки зі свіжим часом. Трохи більше за інтервал, щоб не відкидати
-  // точку, яка ледь встигла.
-  private static final long MAX_FIX_AGE_MS = 10 * 60 * 1000L;
+  // Наскільки стара фікса ще придатна. Рахуємо від інтервалу, а не стало:
+  // при інтервалі 15 хв стало 10 хв означало б, що власна ж фікса старіша за
+  // половину інтервалу — і в приміщенні (де GPS довго не дає свіжої точки)
+  // надсилати ставало б нічого. Беремо не менше 10 хв, щоб короткі інтервали
+  // не надсилали зовсім стару точку зі свіжим часом.
+  private static final long MIN_FIX_AGE_MS = 10 * 60 * 1000L;
+
+  private long maxFixAgeMs = MIN_FIX_AGE_MS;
 
   private LocationManager locationManager;
   private HandlerThread workerThread;
@@ -79,22 +83,40 @@ public final class TrackerService extends Service implements LocationListener {
     prefs = new Prefs(this);
     locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
     ensureChannel();
-    startInForeground(getString(R.string.status_searching));
+    // Якщо піднятися у фоні не вдалося (немає ACCESS_BACKGROUND_LOCATION на
+    // Android 14+), startForeground кидає SecurityException. Без цієї обробки
+    // процес падав би, а користувач бачив би лише «трекер не працює».
+    if (!startInForeground(getString(R.string.status_searching))) {
+      Diag.event(Diag.SERVICE_START, 0, 0, 0, "не вдалося стати foreground");
+      prefs.setTracking(false);
+      stopSelf();
+    }
   }
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
     String action = intent == null ? null : intent.getAction();
     if ("stop".equals(action)) {
+      prefs.setTracking(false);
       stopSelf();
       return START_NOT_STICKY;
     }
 
     if (!prefs.configured()) {
       Log.w(TAG, "не налаштовано: код групи порожній");
+      prefs.setTracking(false);
       stopSelf();
       return START_NOT_STICKY;
     }
+
+    // Сервіс — джерело правди про те, чи увімкнено трекінг. Це критично після
+    // системного перезапуску: START_STICKY приходить із null-intent, і раніше
+    // прапорець лишався false (його ставив лише екран). Наслідок був тихий:
+    // після смерті процесу сервіс відновлювався, але наступний змах або
+    // перезавантаження вже не піднімали його — трекер мовчав назавжди.
+    prefs.setTracking(true);
+
+    maxFixAgeMs = Math.max(MIN_FIX_AGE_MS, 2L * prefs.intervalSeconds() * 1000L);
 
     // Потоки створюємо один раз: повторний старт не повинен лишати старий
     // HandlerThread живим назавжди.
@@ -155,7 +177,7 @@ public final class TrackerService extends Service implements LocationListener {
           "час у майбутньому, провайдер=" + location.getProvider());
       return;
     }
-    if (now - fixAt > MAX_FIX_AGE_MS) {
+    if (now - fixAt > maxFixAgeMs) {
       Diag.event(Diag.FIX_REJECTED, now - fixAt, 0, location.getAccuracy(),
           "застаріла, провайдер=" + location.getProvider());
       return;
@@ -263,16 +285,26 @@ public final class TrackerService extends Service implements LocationListener {
     manager.createNotificationChannel(channel);
   }
 
-  private void startInForeground(String text) {
-    lastNotificationText = text;
-    Notification notification = buildNotification(text);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      startForeground(
-          NOTIFICATION_ID,
-          notification,
-          android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
-    } else {
-      startForeground(NOTIFICATION_ID, notification);
+  /** Піднімає у фореграунд. Повертає false, якщо система не дозволила. */
+  private boolean startInForeground(String text) {
+    try {
+      lastNotificationText = text;
+      Notification notification = buildNotification(text);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        startForeground(
+            NOTIFICATION_ID,
+            notification,
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+      } else {
+        startForeground(NOTIFICATION_ID, notification);
+      }
+      return true;
+    } catch (RuntimeException error) {
+      // SecurityException: немає ACCESS_BACKGROUND_LOCATION, а сервіс
+      // піднімають із фону; ForegroundServiceStartNotAllowedException: фоновий
+      // старт і взагалі заборонений. Ловимо обидва рядком вище.
+      Log.w(TAG, "не вдалося стати foreground: " + error.getMessage());
+      return false;
     }
   }
 
@@ -351,9 +383,10 @@ public final class TrackerService extends Service implements LocationListener {
       // сервіс уже відсутній у системі
     }
 
-    // Екран показує «Трекер активний» за цим прапорцем. Без скидання
-    // убитий процес лишав би зелену крапку при мертвому надсиланні.
-    prefs.setTracking(false);
+    // Прапорець «трекінг» тут не скидаємо: його ставить сам сервіс у
+    // onStartCommand. Якщо система зруйнувала сервіс, а не зупинила його,
+    // START_STICKY чесно підніме його знову — і трекінг має лишитися
+    // увімкненим. Скидати на onDestroy значило б брехати про стан.
     Diag.flush();
     super.onDestroy();
   }

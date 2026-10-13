@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="ru.dneese.mayachok"
-    android:versionCode="12"
-    android:versionName="1.12">
+    android:versionCode="13"
+    android:versionName="1.13">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -14,9 +14,18 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <!-- Дозволу на сповіщення немає: єдине сповіщення — технічне, від самого
-         трекера. Android 13+ просто не покаже його в шухляді, але сервіс
-         працюватиме. Колишній чат, що слави про повідомлення, прибрано. -->
+    <!-- Android 14+ не дає підняти location-сервіс із фону без цього дозволу.
+         А підйом із фону — це саме наш випадок: BootReceiver після
+         перезавантаження й будильник після змаху застосунку. Без дозволу
+         startForeground() кидає SecurityException, і трекер мовчить доти,
+         доки хтось не відкриє застосунок руками. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Android 13+ без цього ховає постійне сповіщення трекера. Сервіс
+         працює й без нього, але приховане сповіщення робить процес
+         «невидимим», і виробники охоче його вбивають. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Дозволу на сповіщення раніше не було навмисно: чат прибрано, і єдине
+         сповіщення — технічне, від самого трекера. -->
 
     <uses-feature
         android:name="android.hardware.location.gps"

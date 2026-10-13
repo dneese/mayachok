@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| 🗺 **[Відкрити мапу](https://dneese.github.io/mayachok/)** | дивитися групу в браузері |
-| 📦 **[Завантажити застосунок для Android](https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk)** | версія **1.12**, без реєстрації й реклами |
+| 🗺 **[Відкрити мапу](https://mayachok.kikikiska.workers.dev/)** | дивитися групу в браузері |
+| 📦 **[Завантажити застосунок для Android](https://github.com/dneese/mayachok/releases/latest/download/mayachok-1.0.apk)** | версія **1.13**, без реєстрації й реклами |
 
 Посилання завжди веде на найновішу збірку: після виходу нової версії
 старе посилання продовжує працювати, окремо нічого оновлювати не треба.
@@ -131,7 +131,9 @@ OpenStreetMap.
 
 - **Застосунок** — чистий Android, без сторонніх бібліотек, ~40 КБ.
 - **Сервер і база** — Cloudflare Worker + D1.
-- **Мапа** — Leaflet + OpenStreetMap, статичні файли.
+- **Мапа** — Leaflet + OpenStreetMap, статичні файли; віддає її той самий
+  Worker, що й дані, тож репозиторій може лишатися закритим (GitHub Pages
+  приватних репозиторіїв не обслуговує).
 
 Розробка, розгортання й API описані в **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 

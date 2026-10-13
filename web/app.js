@@ -1,6 +1,8 @@
 /* Маячок — мапа групи. Код групи живе у location.hash і не йде на сервер. */
 
-const API = 'https://mayachok.kikikiska.workers.dev';
+// Мапа і API тепер живуть на одному Worker, тож беремо власний origin:
+// при зміні домену правити нічого не треба.
+const API = location.origin;
 const PROJECT_URL = 'https://github.com/dneese/mayachok';
 
 // Опитування мапи: 15 секунд, поки в групі є хтось свіжий. Раніше 10 —

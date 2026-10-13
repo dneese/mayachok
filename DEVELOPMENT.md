@@ -9,8 +9,8 @@
 |---|---|---|
 | Android-застосунок | Java, чистий SDK, **без залежностей** | [`app/`](app) |
 | API та сховище | Cloudflare Worker + D1 | [`worker/`](worker) |
-| Мапа | Leaflet + OpenStreetMap, статика | [`web/`](web) |
-| CI | GitHub Actions (APK + Pages) | [`.github/workflows/`](.github/workflows) |
+| Мапа | Leaflet + OpenStreetMap, статика | [`web/`](web) — вкладається у Worker при деплої |
+| CI | GitHub Actions (APK) | [`.github/workflows/`](.github/workflows) |
 
 APK ~70 КБ: жодних AndroidX, Google Play Services чи сторонніх бібліотек.
 Збірка без Gradle: `aapt2` → `javac` → `d8` → `apksigner`.
@@ -191,8 +191,11 @@ mv android-35/android.jar .
 ```
 
 Релізи збирає GitHub Actions при пуші тега `v*`
-([`apk.yml`](.github/workflows/apk.yml)). Мапу публікує
-[`pages.yml`](.github/workflows/pages.yml).
+([`apk.yml`](.github/workflows/apk.yml)). Мапу більше не публікує окремий
+воркфлоу: її вкладає [`scripts/deploy-worker.sh`](scripts/deploy-worker.sh)
+через [`scripts/embed-web.mjs`](scripts/embed-web.mjs) у модуль Worker, тож
+мапа живе на тому самому домені, що й API (а репозиторій може бути
+приватним — GitHub Pages цього не дозволяє).
 
 ### Ключ підпису
 

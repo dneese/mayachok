@@ -14,7 +14,7 @@ public final class Prefs {
   private final Context context;
 
   private static final String API = "https://mayachok.kikikiska.workers.dev";
-  private static final String MAP = "https://dneese.github.io/mayachok";
+  private static final String MAP = "https://mayachok.kikikiska.workers.dev";
   private static final String GITHUB = "https://github.com/dneese/mayachok";
   private final SharedPreferences sp;
 
@@ -71,6 +71,22 @@ public final class Prefs {
 
   public void setTracking(boolean tracking) {
     sp.edit().putBoolean("tracking", tracking).apply();
+  }
+
+  /**
+   * Чи вже показували підказку про фоновий дозвіл.
+   *
+   * Android 11+ не дає запитати ACCESS_BACKGROUND_LOCATION діалогом — лише
+   * через налаштування. Тому ми один раз пояснюємо це й ведемо в налаштування,
+   * а далі не набридаємо. Без дозволу застосунок теж працює (точки йдуть),
+   * але не піднімається сам після перезавантаження.
+   */
+  public boolean backgroundAsked() {
+    return sp.getBoolean("background_asked", false);
+  }
+
+  public void setBackgroundAsked(boolean asked) {
+    sp.edit().putBoolean("background_asked", asked).apply();
   }
 
   /**

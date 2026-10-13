@@ -38,7 +38,8 @@ import android.widget.Toast;
  */
 public final class MainActivity extends Activity {
   private static final int REQ_LOCATION = 10;
-  private static final int REQ_ACTIVITY = 13;
+  private static final int REQ_BACKGROUND = 11;
+  private static final int REQ_NOTIFY = 12;
 
   /**
    * Як часто трекер надсилає точку.
@@ -282,7 +283,11 @@ public final class MainActivity extends Activity {
           @Override
           public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri uri = request.getUrl();
-            if (uri != null && "dneese.github.io".equals(uri.getHost())) return false;
+            // Мапа живе на нашому ж Worker, тож визначаємо свій хост із mapUrl(),
+            // а не хардкодимо: інакше при зміні адреси посилання в карті
+            // почали б відкриватись у браузері замість убудованої мапи.
+            String host = uri == null ? null : uri.getHost();
+            if (host != null && host.equals(Uri.parse(prefs.mapUrl()).getHost())) return false;
             openUrl(uri == null ? "" : uri.toString());
             return true;
           }
@@ -691,6 +696,13 @@ public final class MainActivity extends Activity {
       return;
     }
 
+    startServiceIntent();
+    ensureBackgroundLocation();
+    requestNotifications();
+    render();
+  }
+
+  private void startServiceIntent() {
     Intent service = new Intent(this, TrackerService.class);
     service.setAction("start");
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(service);
@@ -698,7 +710,41 @@ public final class MainActivity extends Activity {
 
     prefs.setTracking(true);
     prefs.setLastSendError("");
-    render();
+  }
+
+  /**
+   * Фоновий дозвіл потрібен лише для підйому з фону (перезавантаження,
+   * змах застосунку). Поки застосунок на екрані чи сервіс живий — точки йдуть
+   * без нього. Тому просимо один раз і не блокуємо запуск.
+   */
+  private void ensureBackgroundLocation() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+    if (hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) return;
+    if (prefs.backgroundAsked()) return;
+
+    prefs.setBackgroundAsked(true);
+    if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+      requestPermissions(
+          new String[] {Manifest.permission.ACCESS_BACKGROUND_LOCATION}, REQ_BACKGROUND);
+    } else {
+      // Android 11+ діалог для цього дозволу не показує — лише налаштування.
+      toast("Увімкніть «Дозволити увесь час» — і трекер підніматиметься сам після перезавантаження");
+      try {
+        startActivity(
+            new Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", getPackageName(), null)));
+      } catch (Exception ignored) {
+        // Налаштування недоступні — не страшно, трекінг працює й без цього.
+      }
+    }
+  }
+
+  /** Сповіщення трекера: постійне, щоб видно було, що він увімкнений. */
+  private void requestNotifications() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+    if (hasPermission(Manifest.permission.POST_NOTIFICATIONS)) return;
+    requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFY);
   }
 
   private void stopTracking() {

@@ -580,6 +580,23 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
+
+    // Статична мапа. Асети вкладає scripts/deploy-worker.sh; у тестах WEB
+    // не існує, тож typeof-перевірка (а не прямий доступ) — інакше впало б
+    // ReferenceError ще до першого тесту.
+    if (typeof WEB !== 'undefined') {
+      const asset = WEB[path === '/' ? '/index.html' : path];
+      if (asset) {
+        return new Response(asset.body, {
+          headers: {
+            'content-type': asset.type,
+            'cache-control': 'no-cache',
+            'x-content-type-options': 'nosniff',
+          },
+        });
+      }
+    }
+
     const db = env.DB;
 
     if (!db) return json({ error: 'DB binding missing' }, 500);

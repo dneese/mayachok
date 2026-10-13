@@ -27,8 +27,13 @@ fi
 
 # Пакуємо worker у єдиний модуль. index.js не має жодних імпортів,
 # тому достатньо перейменувати його у головний модуль.
+#
+# Спереду вкладаємо статичну мапу (web/) як const WEB — так мапа їде тим
+# самим деплоєм, і репозиторій може лишатися приватним (Pages цього не
+# дозволяє на безкоштовному тарифі).
 mkdir -p .deploy
-cp worker/src/index.js ".deploy/$WORKER_NAME.js"
+node scripts/embed-web.mjs > .deploy/web-assets.js
+cat .deploy/web-assets.js worker/src/index.js > ".deploy/$WORKER_NAME.js"
 
 echo "==> завантажую $WORKER_NAME (D1: $DB_ID)"
 
