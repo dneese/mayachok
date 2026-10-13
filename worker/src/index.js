@@ -264,8 +264,11 @@ async function handleIngest(request, db) {
   let ts = Number(params.get('t'));
   if (!Number.isFinite(ts) || ts <= 0) ts = Date.now();
   else if (ts < 1e11) ts *= 1000; // секунди → мілісекунди
-  // Не довіряємо годиннику телефону надто сильно: 5 хв у майбутньому — це баг.
-  ts = Math.min(ts, Date.now() + 5 * 60 * 1000);
+  // Не довіряємо годиннику телефону: у родині трапився фікса з часом на
+  // 514 днів уперед, і вона «заморозила» трекер на чужій точці. Відсікаємо
+  // все, що далі за хвилину в майбутньому (системний час може трохи
+  // обганяти), і більше не приймаємо такий час узагалі.
+  if (ts > Date.now() + 60 * 1000) ts = Date.now();
 
   const acc = isFiniteNumber(params.get('acc'), 0, 100000) ? Number(params.get('acc')) : null;
   const bat = isFiniteNumber(params.get('bat'), 0, 100) ? Math.round(Number(params.get('bat'))) : null;

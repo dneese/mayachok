@@ -64,6 +64,23 @@ public final class TrackerService extends Service implements LocationListener {
   // Це водночас і стеля затримки: щойно фікса протухла, ми вмикаємо GPS
   // знову, щоб не чекати на heartbeat (до 30 хвилин).
   private static final long MAX_FIX_AGE_MS = 5 * 60 * 1000L;
+
+  // Фікс не може бути в майбутньому.
+  //
+  // Це не абстракція: реально трапилося. Телефон (OPPO, Android 15) віддав
+  // точку з часом на 514 днів уперед. Оскільки ми перевіряли лише «застарілі»
+  // точки, така фікса проходила, і lastFixAt ставав майбутнім. Далі всі
+  // справжні точки мали fixTime < lastFixAt, тобто «не новіші», і відкидалися
+  // — трекер змерз на чужій точці на години, а на мапі стояло «Остання точка:
+  // Перу» при людині у Львові.
+  //
+  // Дві хвилини запасу: системний час теж може трохи обганяти GPS.
+  private static final long MAX_FIX_FUTURE_MS = 2 * 60 * 1000L;
+
+  // Скільки поспіль відхилених фікса ми терпимо, перш ніж викинути поточну
+  // точку. Без цього одна невдала фікса здатна назавжди заморозити трекер:
+  // він буде відкидати все нове, бо порівнює з нею.
+  private static final int REJECTS_BEFORE_RESET = 8;
   // Скільки дивимося «через плече» на рух після кожної відправки.
   // Щоб помітити початок руху, GPS має бути увімкнений саме в це вікно:
   // вимкнемо раніше — і дізнаємось про рух лише через heartbeat.
@@ -147,6 +164,8 @@ public final class TrackerService extends Service implements LocationListener {
   private float lastAcc;
   private long lastFixAt; // час фікса, а не час його обробки
   private boolean haveFix;
+  // Скільки фікса поспіль ми відкинули. Необхідне для самолікування.
+  private int consecutiveRejects;
 
   // Остання надіслана точка — щоб не ганяти запити, коли ми стоїмо на місці.
   // Ці поля пишемо з потоку Api, а читаємо з потоку таймера — тому volatile.
@@ -614,6 +633,16 @@ private final TriggerEventListener significantListener =
     long now = System.currentTimeMillis();
     long fixTime = adjustedFixTime(location.getTime(), now);
 
+    // Точка з майбутнім часом — отрута: вона робить lastFixAt майбутнім, і
+    // після цього додатковий відкидає все, що приходить з нормальним часом.
+    // Трекер виглядав би живим, але стояв би на одній точці днями.
+    if (fixTime > now + MAX_FIX_FUTURE_MS) {
+      Diag.event(Diag.FIX_REJECTED, (fixTime - now) / 86400000.0d, 0, location.getAccuracy(),
+          "час у майбутньому на " + Math.round((fixTime - now) / 3600000.0d)
+              + " год, провайдер=" + location.getProvider());
+      return;
+    }
+
     // Точка від пасивного провайдера може бути сирою копією чужої фікса.
     // Вічно «свіжий» час у такій точці змусив би нас думати, що ми рухаємось.
     if (now - fixTime > MAX_FIX_AGE_MS) {
@@ -627,17 +656,27 @@ private final TriggerEventListener significantListener =
 
     // Мультипроміння: приймач вирішує, що супутників більше, ніж є, і
     // телепортує людину на іншу сторону міста. Швидкість вирахуємо самі —
-    // location.getSpeed() GPSЛамає саме на такому шумі.
-    if (haveFix) {
-      double seconds = (fixTime - lastFixAt) / 1000.0d;
-      if (seconds > 0) {
-        double meters = metersFrom(location.getLatitude(), location.getLongitude());
-        if (meters / seconds > MAX_PLAUSIBLE_SPEED_MS) {
-          Log.w(TAG, "неправдоподібна швидкість — точку відкидаю");
-          Diag.event(Diag.FIX_REJECTED, meters / seconds, meters, seconds,
-              "швидкість " + (meters / seconds) + " м/с, провайдер=" + location.getProvider());
-          return;
-        }
+    // location.getSpeed() GPS ламає саме на такому шумі.
+    //
+    // Опис від бази дозволяє ловити стрибок навіть на першій фіксах після
+    // запуску, коли ще немає жодної фікси в пам'яті: саме так у родину
+    // проскочила точка з іншого континента — її прийняли за першу ж.
+    double baseLat = haveFix ? lastLat : prefs.lastPosLat();
+    double baseLon = haveFix ? lastLon : prefs.lastPosLon();
+    long baseAt = haveFix ? lastFixAt : prefs.lastPosAt();
+
+    if (haveFix || prefs.hasLastPos()) {
+      double seconds = (fixTime - baseAt) / 1000.0d;
+      // Якщо час фіксів пішов назад, швидкість не має сенсу — просто
+      // оновлюємо базу, інакше один «розсинхрон» назавжди відсікає точки.
+      if (seconds > 5 && metersFrom(location.getLatitude(), location.getLongitude()) / seconds > MAX_PLAUSIBLE_SPEED_MS) {
+        Log.w(TAG, "неправдоподібний стрибок — точку відкидаю");
+        Diag.event(Diag.FIX_REJECTED,
+            metersFrom(location.getLatitude(), location.getLongitude()) / seconds,
+            metersFrom(location.getLatitude(), location.getLongitude()), seconds,
+            "стрибок на " + Math.round(metersFrom(location.getLatitude(), location.getLongitude()))
+                + " м, провайдер=" + location.getProvider());
+        return;
       }
     }
 
@@ -654,16 +693,42 @@ private final TriggerEventListener significantListener =
     boolean incomingGood = incoming <= GOOD_ACCURACY;
     boolean currentGood = haveFix && lastAcc <= GOOD_ACCURACY;
     boolean accept;
-    if (!haveFix) accept = true;
-    else if (incomingGood && !currentGood) accept = true; // краще за те, що є
-    else if (!incomingGood && currentGood) accept = false; // погірше — ігноруємо
-    else accept = fresher || muchBetter; // обидві прийнятні — беремо новішу
+    String reason;
+    if (!haveFix) {
+      accept = true;
+      reason = "перша точка";
+    } else if (incomingGood && !currentGood) {
+      accept = true; // краще за те, що є
+      reason = "точність краща";
+    } else if (!incomingGood && currentGood) {
+      accept = false; // погірше — ігноруємо
+      reason = "точність гірша за наявну";
+    } else if (fresher) {
+      accept = true; // обидві прийнятні — беремо новішу
+      reason = "новіша за попередню";
+    } else {
+      accept = muchBetter;
+      reason = "не новіша і не краща";
+    }
 
     if (!accept) {
-      Diag.event(Diag.FIX_REJECTED, incoming, lastAcc, fresher ? 1 : 0,
-          "точність гірша, провайдер=" + provider);
+      Diag.event(Diag.FIX_REJECTED, incoming, lastAcc, 0,
+          reason + ", провайдер=" + provider);
+      // Самолікування. Якщо ми вже N разів поспіль усе відкидаємо, значить
+      // поточна точка нам шкодить: викидаємо її, щоб наступна нормальна
+      // фікса змогла пройти. Інакше одна невдала фікса (підробка локації,
+      // зламаний годинник) заморозила б трекер назавжди.
+      if (++consecutiveRejects >= REJECTS_BEFORE_RESET) {
+        Diag.event(Diag.FIX_REJECTED, consecutiveRejects, 0, 0,
+            "скидаю застряглу точку, щоб не блокувати наступні");
+        Log.w(TAG, "застрягла точка, скидаю — інакше трекер не оживе");
+        haveFix = false;
+        lastAcc = 9999f;
+        consecutiveRejects = 0;
+      }
       return;
     }
+    consecutiveRejects = 0;
 
     Diag.event(Diag.FIX_ACCEPTED, incoming, location.getTime(), motionDetected ? 1 : 0,
         "провайдер=" + provider + " свіжість=" + (now - fixTime) + "мс");
@@ -673,6 +738,7 @@ private final TriggerEventListener significantListener =
     lastAcc = incoming;
     lastFixAt = fixTime;
     haveFix = true;
+    prefs.setLastPos(lastLat, lastLon, lastFixAt);
 
     updateNotification(notificationText(provider));
 

@@ -11,6 +11,7 @@ import java.util.UUID;
  */
 public final class Prefs {
   private static final String FILE = "mayachok";
+  private final Context context;
 
   private static final String API = "https://mayachok.kikikiska.workers.dev";
   private static final String MAP = "https://dneese.github.io/mayachok";
@@ -18,7 +19,8 @@ public final class Prefs {
   private final SharedPreferences sp;
 
   public Prefs(Context context) {
-    sp = context.getSharedPreferences(FILE, Context.MODE_PRIVATE);
+    this.context = context.getApplicationContext();
+    sp = this.context.getSharedPreferences(FILE, Context.MODE_PRIVATE);
   }
 
   /** Стабільний ідентифікатор цього телефону. Тому бачить себе на карті. */
@@ -110,6 +112,48 @@ public boolean diagnostics() {
 
   public void setDiagnostics(boolean enabled) {
     sp.edit().putBoolean("diagnostics", enabled).apply();
+  }
+
+  /**
+   * Остання прийнята позиція — щоб ловити стрибок навіть на першій фіксах
+   * після запуску застосунку, коли в пам'яті ще нічого немає.
+   *
+   * Саме через відсутність цього в родину проскочила точка з іншого
+   * континента: перша ж фікса після старту приймалася без перевірки.
+   */
+  public boolean hasLastPos() {
+    return sp.getLong("last_pos_at", 0L) > 0;
+  }
+
+  public double lastPosLat() {
+    return Double.longBitsToDouble(sp.getLong("last_pos_lat", 0L));
+  }
+
+  public double lastPosLon() {
+    return Double.longBitsToDouble(sp.getLong("last_pos_lon", 0L));
+  }
+
+  public long lastPosAt() {
+    return sp.getLong("last_pos_at", 0L);
+  }
+
+  public void setLastPos(double lat, double lon, long at) {
+    sp.edit()
+        .putLong("last_pos_lat", Double.doubleToRawLongBits(lat))
+        .putLong("last_pos_lon", Double.doubleToRawLongBits(lon))
+        .putLong("last_pos_at", at)
+        .apply();
+  }
+
+  /** Версія застосунку — щоб у журналі було видно, звідки прийшли дані. */
+  public String appVersion() {
+    try {
+      return context.getPackageManager()
+          .getPackageInfo(context.getPackageName(), 0)
+          .versionName;
+    } catch (Exception error) {
+      return "?";
+    }
   }
 
   public String api() {

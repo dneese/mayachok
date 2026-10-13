@@ -8,8 +8,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT="build"
-VERSION_CODE=10
-VERSION_NAME="1.10"
+VERSION_CODE=11
+VERSION_NAME="1.11"
 # Стара назва, яку не змінюємо ніколи: на неї посилаються README, веб-сторінка
 # й розіслані в месенджерах посилання releases/latest/download/...
 # GitHub шукає asset з ТОЧНОЮ назвою, тож перейменування зламало б усі старі

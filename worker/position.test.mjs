@@ -209,6 +209,17 @@ check('leave повертає ok', lv.ok, true);
 check('рядок учасника видалено', users.filter((u) => u.uid === 'lost1').length, 0);
 check('з мапи зник (кеш скинуто)', (await group('code0002b')).users.length, 0);
 
+console.log('час із майбутнього (знайдено в родині: +514 днів):');
+{
+  const future = Date.now() + 514 * 24 * 3600 * 1000;
+  await ingest('code0001a', 'timewarp', 49.83, 24.02, future);
+  const row = users.find((u) => u.uid === 'timewarp');
+  const skew = future - Date.now();
+  check('час обрізано до «зараз» замість +514 днів',
+    Math.abs(row.point_ts - Date.now()) < 5000, true);
+  check('координати при цьому збереглися', row.lat, 49.83);
+}
+
 console.log('діагностика:');
 const diagPost = async (events, uid = 'dev1') =>
   (await worker.fetch(new Request('https://x/api/diag', {

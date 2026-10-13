@@ -89,11 +89,11 @@ public final class Diag {
     if (!enabled()) return;
 
     session = UUID.randomUUID().toString().substring(0, 8);
-    // Пристрій, Doze, оптимізація батареї — головні причини, чому Android
-    // «іноді просто перестає» надсилати. Без цього діагностика дурна.
+    // Версія застосунку: без неї в журналі не видно, звідки прийшли дані, і
+    // доводиться гадати, чи телефон уже має той фікс, який ми додали.
     event(ENV, Build.VERSION.SDK_INT, batteryPercent(),
         ignoresBatteryOptimizations() ? 1 : 0,
-        Build.MANUFACTURER + " " + Build.MODEL);
+        Build.MANUFACTURER + " " + Build.MODEL + " / Маячок " + prefs.appVersion());
     event(SERVICE_START, 0, 0, 0, session);
 
     io.scheduleWithFixedDelay(
