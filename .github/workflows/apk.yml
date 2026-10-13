@@ -74,6 +74,7 @@ jobs:
           name: mayachok-apk
           path: app/build/mayachok-*.apk
           if-no-files-found: error
+          retention-days: 3
 
       # Releases вимагає тег, тож публікуємо лише для push у refs/tags/v*
       - name: Опублікувати в Releases
