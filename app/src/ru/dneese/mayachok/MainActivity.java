@@ -5,15 +5,20 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.text.format.DateUtils;
 import android.view.Gravity;
 import android.view.View;
+import android.view.animation.AccelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -23,18 +28,19 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
 /**
- * Один екран і дві вкладки: Група → Мапа.
+ * Мапа — це перший і головний екран. Коли група вже є, застосунок відкриває
+ * одразу мапу, а всі налаштування ховаються у висувному меню ліворуч.
  *
- * Вкладки перемикаються нижнім меню, а апаратна кнопка «назад» завжди
- * повертає на Групу. Ключова деталь: назад НІКОЛИ не віддається WebView, бо
- * той інакше повертається на about:blank — це давало білий екран.
+ * Трекера ніхто не «вмикає»: щойно є група й дозвіл на геолокацію, він
+ * стартує сам і працює у фоні. Кнопки «Почати» більше немає — дитині чи
+ * батькам не треба нічого пам'ятати.
  */
 public final class MainActivity extends Activity {
   private static final int REQ_LOCATION = 10;
@@ -55,43 +61,45 @@ public final class MainActivity extends Activity {
     R.string.interval_300, R.string.interval_600, R.string.interval_900,
   };
 
-  private static final int TAB_GROUP = 0;
-  private static final int TAB_MAP = 1;
-
-  private static final int[] TITLES = {R.string.app_name, R.string.tab_map};
+  /** Ширина висувного меню. Має збігатися з шириною @id/drawer у layout. */
+  private static final int DRAWER_WIDTH_DP = 320;
+  private static final long DRAWER_MS = 220L;
 
   private Prefs prefs;
   private Api api;
 
-  private View statusBanner;
+  private FrameLayout mapPanel;
+  private View appbar;
+  private View appbarLine;
+  private View onboardingPanel;
+  private WebView mapView;
+  private View mapError;
+
+  private View scrim;
+  private View drawer;
+  private ImageButton menuButton;
+  private ImageButton drawerClose;
+
   private View statusDot;
+  private View mapStatusDot;
   private TextView status;
   private TextView statusDetail;
-  private TextView title;
-  private ImageButton back;
-  private EditText nameInput;
 
-  private View groupEmpty;
-  private View groupReady;
-  private TextView codeValue;
+  private EditText nameInput;
+  private EditText nameMenuInput;
   private EditText codeInput;
   private Button createButton;
   private Button joinButton;
 
+  private TextView codeValue;
+
   private Button[] intervalChips;
-  private Button toggle;
   private CheckBox diagBox;
   private TextView diagState;
 
-  private View mainPanel;
-  private LinearLayout mapPanel;
-  private View[] tabs;
-  private TextView[] tabTexts;
-  private ImageView[] tabIcons;
-  private WebView mapView;
-  private View mapError;
-
-  private int currentTab = TAB_GROUP;
+  private boolean drawerOpen = false;
+  private boolean mapStarted = false;
+  private boolean autoStartPrompted = false;
 
   private final Handler ticker = new Handler(Looper.getMainLooper());
 
@@ -103,45 +111,42 @@ public final class MainActivity extends Activity {
     prefs = new Prefs(this);
     api = new Api(this);
 
-    statusBanner = findViewById(R.id.status_banner);
+    mapPanel = findViewById(R.id.map_panel);
+    appbar = findViewById(R.id.appbar);
+    appbarLine = findViewById(R.id.appbar_line);
+    onboardingPanel = findViewById(R.id.onboarding_panel);
+    mapView = findViewById(R.id.map_view);
+
+    scrim = findViewById(R.id.scrim);
+    drawer = findViewById(R.id.drawer);
+    menuButton = findViewById(R.id.menu);
+    drawerClose = findViewById(R.id.drawer_close);
+
     statusDot = findViewById(R.id.status_dot);
+    mapStatusDot = findViewById(R.id.map_status_dot);
     status = findViewById(R.id.status);
     statusDetail = findViewById(R.id.status_detail);
-    title = findViewById(R.id.title);
-    back = findViewById(R.id.back);
-    nameInput = findViewById(R.id.name);
 
-    groupEmpty = findViewById(R.id.group_empty);
-    groupReady = findViewById(R.id.group_ready);
-    codeValue = findViewById(R.id.code_value);
+    nameInput = findViewById(R.id.name);
+    nameMenuInput = findViewById(R.id.name_menu);
     codeInput = findViewById(R.id.code);
     createButton = findViewById(R.id.create);
     joinButton = findViewById(R.id.join);
 
-    toggle = findViewById(R.id.toggle);
+    codeValue = findViewById(R.id.code_value);
     diagBox = findViewById(R.id.diag);
     diagState = findViewById(R.id.diag_state);
 
-    mainPanel = findViewById(R.id.main_panel);
-    mapPanel = findViewById(R.id.map_panel);
-    mapView = findViewById(R.id.map_view);
-
-    tabs = new View[] {findViewById(R.id.tab_group), findViewById(R.id.tab_map)};
-    tabTexts =
-        new TextView[] {findViewById(R.id.tab_group_text), findViewById(R.id.tab_map_text)};
-    tabIcons =
-        new ImageView[] {findViewById(R.id.tab_group_icon), findViewById(R.id.tab_map_icon)};
-
     nameInput.setText(prefs.name());
+    nameMenuInput.setText(prefs.name());
     codeInput.setText(prefs.code());
 
     buildIntervalChips();
-    setUpTabs();
+    setUpDrawer();
     setUpActions();
     setUpMap();
 
     handleDeepLink(getIntent());
-    showTab(TAB_GROUP);
     render();
   }
 
@@ -174,21 +179,97 @@ public final class MainActivity extends Activity {
     }
   }
 
-  private void setUpTabs() {
-    for (int i = 0; i < tabs.length; i++) {
-      final int index = i;
-      tabs[i].setOnClickListener(
-          new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-              if (index == TAB_MAP && !prefs.configured()) {
-                toast("Спершу створіть групу");
-                return;
+  // --- висувне меню ---
+
+  private void setUpDrawer() {
+    menuButton.setOnClickListener(
+        new View.OnClickListener() {
+          @Override
+          public void onClick(View view) {
+            openDrawer();
+          }
+        });
+    drawerClose.setOnClickListener(
+        new View.OnClickListener() {
+          @Override
+          public void onClick(View view) {
+            closeDrawer();
+          }
+        });
+    scrim.setOnClickListener(
+        new View.OnClickListener() {
+          @Override
+          public void onClick(View view) {
+            closeDrawer();
+          }
+        });
+
+    // Ім'я в меню зберігається на кожну зміну — трекер читає його під час
+    // надсилання, тож нове ім'я підхоплюється без жодного «Зберегти».
+    nameMenuInput.addTextChangedListener(
+        new TextWatcher() {
+          @Override
+          public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+          @Override
+          public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+          @Override
+          public void afterTextChanged(Editable s) {
+            prefs.setName(s.toString());
+          }
+        });
+  }
+
+  private int drawerWidthPx() {
+    return dp(DRAWER_WIDTH_DP);
+  }
+
+  private void openDrawer() {
+    if (drawerOpen) return;
+    drawerOpen = true;
+    drawer.setVisibility(View.VISIBLE);
+    scrim.setVisibility(View.VISIBLE);
+    drawer.setTranslationX(-drawerWidthPx());
+    scrim.setAlpha(0f);
+    drawer
+        .animate()
+        .translationX(0f)
+        .setDuration(DRAWER_MS)
+        .setInterpolator(new DecelerateInterpolator())
+        .start();
+    scrim.animate().alpha(1f).setDuration(DRAWER_MS).start();
+  }
+
+  private void closeDrawer() {
+    if (!drawerOpen) return;
+    drawerOpen = false;
+    prefs.setName(nameMenuInput.getText().toString());
+    drawer
+        .animate()
+        .translationX(-drawerWidthPx())
+        .setDuration(DRAWER_MS)
+        .setInterpolator(new AccelerateInterpolator())
+        .withEndAction(
+            new Runnable() {
+              @Override
+              public void run() {
+                if (!drawerOpen) drawer.setVisibility(View.GONE);
               }
-              showTab(index);
-            }
-          });
-    }
+            })
+        .start();
+    scrim
+        .animate()
+        .alpha(0f)
+        .setDuration(DRAWER_MS)
+        .withEndAction(
+            new Runnable() {
+              @Override
+              public void run() {
+                if (!drawerOpen) scrim.setVisibility(View.GONE);
+              }
+            })
+        .start();
   }
 
   private void setUpActions() {
@@ -196,20 +277,8 @@ public final class MainActivity extends Activity {
     onClick(R.id.join, new Runnable() { @Override public void run() { joinGroup(); } });
     onClick(R.id.share, new Runnable() { @Override public void run() { shareInvite(); } });
     onClick(R.id.copy, new Runnable() { @Override public void run() { copy(prefs.mapUrl()); } });
-    onClick(R.id.map, new Runnable() { @Override public void run() { showTab(TAB_MAP); } });
     onClick(R.id.forget, new Runnable() { @Override public void run() { confirmForget(); } });
     onClick(R.id.github, new Runnable() { @Override public void run() { openUrl(prefs.githubUrl()); } });
-    onClick(R.id.back, new Runnable() { @Override public void run() { goBack(); } });
-    onClick(
-        R.id.toggle,
-        new Runnable() {
-          @Override
-          public void run() {
-            saveBasics();
-            if (isTracking()) stopTracking();
-            else startTracking();
-          }
-        });
 
     diagBox.setOnCheckedChangeListener(
         new CompoundButton.OnCheckedChangeListener() {
@@ -317,7 +386,8 @@ public final class MainActivity extends Activity {
     errorBox.setPadding(dp(28), dp(24), dp(28), dp(24));
     errorBox.setVisibility(View.GONE);
     errorBox.setLayoutParams(
-        new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
     TextView errorText = new TextView(this);
     errorText.setText(R.string.map_error);
@@ -356,59 +426,10 @@ public final class MainActivity extends Activity {
     return Math.round(value * getResources().getDisplayMetrics().density);
   }
 
-  private void showTab(int tab) {
-    if (tab != TAB_GROUP && !prefs.configured()) return;
-
-    currentTab = tab;
-    mainPanel.setVisibility(tab == TAB_GROUP ? View.VISIBLE : View.GONE);
-    mapPanel.setVisibility(tab == TAB_MAP ? View.VISIBLE : View.GONE);
-
-    for (int i = 0; i < tabs.length; i++) {
-      boolean active = i == tab;
-      tabs[i].setSelected(active);
-      tabTexts[i].setTextColor(getColor(active ? R.color.brand : R.color.text_muted));
-      tabIcons[i].setAlpha(active ? 1f : 0.55f);
-    }
-
-    title.setText(TITLES[tab]);
-    back.setVisibility(tab == TAB_GROUP ? View.INVISIBLE : View.VISIBLE);
-
-    if (tab == TAB_MAP) {
-      if (mapView.getUrl() == null) mapView.loadUrl(prefs.mapUrl());
-      mapView.post(
-          new Runnable() {
-            @Override
-            public void run() {
-              mapView.invalidate();
-            }
-          });
-    }
-
-    // Найважливіше для батареї. Сторінка мапи опитує API таймером, і
-    // setInterval у JavaScript НЕ зупиняється, коли вкладка просто
-    // прихована. Без pauseTimers() ми робимо десятки тисяч запитів на добу.
-    if (tab == TAB_MAP) {
-      mapView.resumeTimers();
-      mapView.onResume();
-    } else {
-      mapView.pauseTimers();
-      mapView.onPause();
-      mapView.stopLoading();
-    }
-  }
-
-  private void goBack() {
-    if (currentTab != TAB_GROUP) {
-      showTab(TAB_GROUP);
-      return;
-    }
-    super.onBackPressed();
-  }
-
   @Override
   public void onBackPressed() {
-    if (currentTab != TAB_GROUP) {
-      showTab(TAB_GROUP);
+    if (drawerOpen) {
+      closeDrawer();
       return;
     }
     super.onBackPressed();
@@ -424,17 +445,14 @@ public final class MainActivity extends Activity {
   @Override
   protected void onResume() {
     super.onResume();
-    // Самовідновлення: користувач відкрив застосунок, а сервіс мертвий
-    // (вбив процес, не зміг піднятися з фону). Відкрите з екрана — це
-    // дозволений контекст, і трекер оживає без жодного «Почати».
-    if (prefs.configured() && isTracking() && !TrackerService.running) {
-      startServiceIntent();
-    }
     render();
-    if (currentTab == TAB_MAP) {
+    // Мапа — головний екран, тож її таймери живуть, поки екран відкритий.
+    if (prefs.configured()) {
       mapView.resumeTimers();
       mapView.onResume();
     }
+    // Автозапуск: щойно є група й дозвіл — трекер піднімається сам.
+    autoStart();
     // Стан показує «остання точка: N хв тому», тож перечитуємо його
     // раз на півхвилини, поки екран відкритий.
     ticker.postDelayed(statusTick, 30 * 1000L);
@@ -472,14 +490,20 @@ public final class MainActivity extends Activity {
     if (!"mayachok".equals(data.getScheme())) return;
     String code = Prefs.extractCode(data.toString());
     if (!isCode(code)) return;
-    prefs.setCode(code);
-    if (!codeInput.getText().toString().isEmpty()) codeInput.setText(code);
+    if (prefs.configured()) return; // уже в групі — запрошення не змінює нічого
+    codeInput.setText(code);
+    if (!prefs.name().isEmpty()) {
+      joinGroup();
+    } else {
+      toast("Введіть своє ім’я і натисніть «Приєднатися»");
+    }
   }
 
   // --- група ---
 
   private void saveBasics() {
     prefs.setName(nameInput.getText().toString());
+    prefs.setName(nameMenuInput.getText().toString());
   }
 
   private void createGroup() {
@@ -500,7 +524,8 @@ public final class MainActivity extends Activity {
                     if (code != null) {
                       prefs.setCode(code);
                       toast("Групу створено");
-                      if (!prefs.isTracking()) startTracking();
+                      render();
+                      autoStart();
                     } else {
                       toast(error);
                     }
@@ -522,6 +547,9 @@ public final class MainActivity extends Activity {
       return;
     }
     String name = nameInput.getText().toString().trim();
+    if (name.isEmpty()) {
+      name = nameMenuInput.getText().toString().trim();
+    }
     if (name.isEmpty()) {
       toast("Введіть своє ім’я");
       return;
@@ -548,7 +576,8 @@ public final class MainActivity extends Activity {
                       return;
                     }
                     toast("Ви в групі");
-                    if (!prefs.isTracking()) startTracking();
+                    render();
+                    autoStart();
                   }
                 });
           }
@@ -588,7 +617,7 @@ public final class MainActivity extends Activity {
                 }
                 prefs.setCode("");
                 codeInput.setText("");
-                showTab(TAB_GROUP);
+                closeDrawer();
                 render();
               }
             })
@@ -599,17 +628,29 @@ public final class MainActivity extends Activity {
   private void render() {
     boolean hasGroup = prefs.configured();
 
-    groupEmpty.setVisibility(hasGroup ? View.GONE : View.VISIBLE);
-    groupReady.setVisibility(hasGroup ? View.VISIBLE : View.GONE);
+    mapPanel.setVisibility(hasGroup ? View.VISIBLE : View.GONE);
+    appbar.setVisibility(hasGroup ? View.VISIBLE : View.GONE);
+    appbarLine.setVisibility(hasGroup ? View.VISIBLE : View.GONE);
+    onboardingPanel.setVisibility(hasGroup ? View.GONE : View.VISIBLE);
 
     if (hasGroup) {
       codeValue.setText(prefs.mapUrl());
-      if (codeInput.getText().toString().isEmpty()) codeInput.setText(prefs.code());
+      if (!mapStarted) {
+        mapStarted = true;
+        mapView.loadUrl(prefs.mapUrl());
+        mapView.resumeTimers();
+        mapView.onResume();
+      }
+    } else {
+      mapStarted = false;
+      if (drawerOpen) closeDrawer();
     }
 
-    boolean tracking = isTracking();
-    toggle.setText(tracking ? R.string.btn_stop : R.string.btn_start);
+    String name = prefs.name();
+    if (!name.equals(nameInput.getText().toString().trim())) nameInput.setText(name);
+    if (!name.equals(nameMenuInput.getText().toString().trim())) nameMenuInput.setText(name);
 
+    boolean tracking = isTracking();
     String error = prefs.lastSendError();
     int dotColor;
     if (tracking) {
@@ -631,11 +672,13 @@ public final class MainActivity extends Activity {
         dotColor = getColor(R.color.ok);
       }
     } else {
-      status.setText(hasGroup ? R.string.status_ready : R.string.status_no_group);
+      status.setText(hasGroup ? R.string.status_starting : R.string.status_no_group);
       statusDetail.setVisibility(View.GONE);
       dotColor = getColor(hasGroup ? R.color.warn : R.color.text_faint);
     }
-    statusDot.setBackgroundTintList(android.content.res.ColorStateList.valueOf(dotColor));
+    ColorStateList dot = ColorStateList.valueOf(dotColor);
+    statusDot.setBackgroundTintList(dot);
+    mapStatusDot.setBackgroundTintList(dot);
 
     for (int i = 0; i < intervalChips.length; i++) {
       intervalChips[i].setSelected(INTERVALS[i] == prefs.intervalSeconds());
@@ -700,20 +743,29 @@ public final class MainActivity extends Activity {
     return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
   }
 
-  private void startTracking() {
-    if (!prefs.configured()) {
-      toast("Спершу створіть групу або введіть код");
-      return;
-    }
+  /**
+   * Автозапуск трекера.
+   *
+   * Ніякої кнопки «Почати» немає: якщо група є, трекер має працювати. Єдиний
+   * раз, коли ми просимо геолокацію, — коли її ще не дали; далі все тихо.
+   * Самовідновлення після вбитого процесу теж тут: щойно екран відкрито,
+   * мертвий сервіс піднімається знову.
+   */
+  private void autoStart() {
+    if (!prefs.configured()) return;
+    if (prefs.isTracking() && TrackerService.running) return;
+
     if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
-      requestPermissions(new String[] {Manifest.permission.ACCESS_FINE_LOCATION}, REQ_LOCATION);
+      if (!autoStartPrompted) {
+        autoStartPrompted = true;
+        requestPermissions(new String[] {Manifest.permission.ACCESS_FINE_LOCATION}, REQ_LOCATION);
+      }
       return;
     }
 
     startServiceIntent();
     ensureBackgroundLocation();
     requestNotifications();
-    render();
   }
 
   private void startServiceIntent() {
@@ -742,7 +794,6 @@ public final class MainActivity extends Activity {
           new String[] {Manifest.permission.ACCESS_BACKGROUND_LOCATION}, REQ_BACKGROUND);
     } else {
       // Android 11+ діалог для цього дозволу не показує — лише налаштування.
-      toast("Увімкніть «Дозволити увесь час» — і трекер підніматиметься сам після перезавантаження");
       try {
         startActivity(
             new Intent(
@@ -780,7 +831,7 @@ public final class MainActivity extends Activity {
     super.onRequestPermissionsResult(code, permissions, results);
     if (code == REQ_LOCATION) {
       if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-        startTracking();
+        autoStart();
       } else {
         toast("Без геолокації трекер не працює");
       }

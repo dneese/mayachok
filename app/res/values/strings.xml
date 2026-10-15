@@ -2,8 +2,17 @@
 <resources>
     <string name="app_name">Маячок</string>
 
+    <!-- онбординг і меню -->
+    <string name="onboard_title">Маячок</string>
+    <string name="onboard_subtitle">Простий сімейний трекер. Створіть групу — і всі свої бачать одне одного на мапі.</string>
+    <string name="onboard_autostart_hint">Далі нічого налаштовувати не треба: щойно є група й дозвіл на геолокацію, застосунок сам надсилає ваше місце у фоні.</string>
+    <string name="menu_title">Маячок</string>
+    <string name="btn_menu">Меню</string>
+    <string name="btn_close">Закрити</string>
+
     <!-- стан -->
     <string name="status_no_group">Спершу створіть групу</string>
+    <string name="status_starting">Запускаю трекер…</string>
     <string name="status_ready">Готово — натисніть «Почати»</string>
     <string name="status_on">Трекер працює</string>
     <string name="status_searching">Шукаю сигнал GPS…</string>

@@ -22,9 +22,18 @@ public final class Api {
   private final ExecutorService pool = Executors.newSingleThreadExecutor();
   private final ExecutorService points = Executors.newSingleThreadExecutor();
 
-  // 10 секунд на помилку — це довго: телефон кілька разів на добу «чекає» мережу
-  // даремно, і точка зміщується на інтервал. 5 секунд — компроміс.
-  private static final int TIMEOUT_MS = 5000;
+  // Діагностика реальних телефонів показала, що 5 секунд замало: у слабкій
+  // мережі (метро, село, стрибок між Wi-Fi і LTE) з'єднання не встигало
+  // встановитися, і точка падала з SocketTimeoutException. Дали запас:
+  // 10 с на з'єднання, 15 с на читання — краще зачекати, ніж втратити точку.
+  private static final int CONNECT_TIMEOUT_MS = 10000;
+  private static final int READ_TIMEOUT_MS = 15000;
+
+  // Одна швидка повторна спроба після мережевої невдачі. Найчастіша причина
+  // збою — тимчасовий обрив DNS (UnknownHostException), який за секунду
+  // минає. Друга спроба повертає більшість таких точок.
+  private static final int SEND_ATTEMPTS = 2;
+  private static final long SEND_RETRY_DELAY_MS = 1200;
 
   public Api(Context context) {
     this.context = context.getApplicationContext();
@@ -115,8 +124,8 @@ public final class Api {
       connection = (HttpURLConnection) url.openConnection();
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
-      connection.setConnectTimeout(TIMEOUT_MS);
-      connection.setReadTimeout(TIMEOUT_MS);
+      connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+      connection.setReadTimeout(READ_TIMEOUT_MS);
       connection.setRequestProperty("Content-Type", "application/json");
       connection.setRequestProperty("Accept", "application/json");
       connection.getOutputStream().write(body.getBytes("UTF-8"));
@@ -137,8 +146,8 @@ public final class Api {
   private static HttpURLConnection open(String fullUrl) throws Exception {
     HttpURLConnection connection = (HttpURLConnection) new URL(fullUrl).openConnection();
     connection.setRequestMethod("GET");
-    connection.setConnectTimeout(TIMEOUT_MS);
-    connection.setReadTimeout(TIMEOUT_MS);
+    connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+    connection.setReadTimeout(READ_TIMEOUT_MS);
     connection.setRequestProperty("Accept", "application/json");
     return connection;
   }
@@ -223,8 +232,8 @@ public final class Api {
       connection = (HttpURLConnection) url.openConnection();
       connection.setRequestMethod("POST");
       connection.setDoOutput(true);
-      connection.setConnectTimeout(TIMEOUT_MS);
-      connection.setReadTimeout(TIMEOUT_MS);
+      connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+      connection.setReadTimeout(READ_TIMEOUT_MS);
       connection.setRequestProperty("Accept", "application/json");
       connection.setRequestProperty("Content-Length", "0");
       connection.getOutputStream().close();
@@ -271,7 +280,46 @@ public final class Api {
     return text.toString();
   }
 
+  /** Результат однієї спроби: успіх, чи варто повторити, і текст помилки. */
+  private static final class SendOutcome {
+    final boolean success;
+    final boolean retryable;
+    final String error;
+
+    SendOutcome(boolean success, boolean retryable, String error) {
+      this.success = success;
+      this.retryable = retryable;
+      this.error = error;
+    }
+  }
+
+  /**
+   * Надсилає точку, за потреби — з однією повторною спробою.
+   *
+   * Повторюємо лише мережеві збої (немає з'єднання, DNS, таймаут), а не
+   * відповіді сервера з кодом помилки: якщо сервер уже відповів 4xx/5xx,
+   * друга спроба нічого не змінить.
+   */
   private String doSend(Prefs prefs, double lat, double lon, float acc, long fixAt) {
+    String lastError = null;
+    for (int attempt = 1; attempt <= SEND_ATTEMPTS; attempt++) {
+      SendOutcome outcome = trySend(prefs, lat, lon, acc, fixAt);
+      if (outcome.success) return null;
+      lastError = outcome.error;
+      if (!outcome.retryable) return lastError;
+      if (attempt < SEND_ATTEMPTS) {
+        try {
+          Thread.sleep(SEND_RETRY_DELAY_MS);
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          return lastError;
+        }
+      }
+    }
+    return lastError;
+  }
+
+  private SendOutcome trySend(Prefs prefs, double lat, double lon, float acc, long fixAt) {
     HttpURLConnection connection = null;
     try {
       StringBuilder query = new StringBuilder();
@@ -289,12 +337,14 @@ public final class Api {
       URL url = new URL(prefs.api() + "/api/ingest?" + query);
       connection = (HttpURLConnection) url.openConnection();
       connection.setRequestMethod("GET");
-      connection.setConnectTimeout(TIMEOUT_MS);
-      connection.setReadTimeout(TIMEOUT_MS);
+      connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+      connection.setReadTimeout(READ_TIMEOUT_MS);
       connection.setRequestProperty("Accept", "application/json");
 
       int status = connection.getResponseCode();
-      if (status < 200 || status >= 300) return "HTTP " + status;
+      if (status < 200 || status >= 300) {
+        return new SendOutcome(false, false, "HTTP " + status);
+      }
 
       InputStream stream = connection.getInputStream();
       BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
@@ -302,9 +352,10 @@ public final class Api {
         // читаємо відповідь, щоб зʼєднання закрилося коректно
       }
       reader.close();
-      return null;
+      return new SendOutcome(true, false, null);
     } catch (Exception error) {
-      return error.getClass().getSimpleName() + ": " + error.getMessage();
+      return new SendOutcome(
+          false, true, error.getClass().getSimpleName() + ": " + error.getMessage());
     } finally {
       if (connection != null) connection.disconnect();
     }

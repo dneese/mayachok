@@ -1,107 +1,100 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Мапа — перший екран, а не вкладка: люди відкривають застосунок, щоб побачити
+  рідних, а не щоб налаштовувати. Усе інше — у висувному меню ліворуч.
+  Жодних вкладок і нижньої панелі: вони вимагали зайвого тапу.
+-->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg">
 
-    <!-- Верхня панель -->
+    <!-- МАПА: головний екран (видно, коли група вже є) -->
+    <FrameLayout
+        android:id="@+id/map_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="56dp"
+        android:visibility="gone">
+
+        <WebView
+            android:id="@+id/map_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:overScrollMode="never" />
+    </FrameLayout>
+
+    <!-- Панель над мапою: меню ліворуч, крапка стану праворуч -->
     <LinearLayout
         android:id="@+id/appbar"
         style="@style/TopBar"
         android:layout_gravity="top"
-        android:elevation="0dp">
+        android:visibility="gone">
 
         <ImageButton
-            android:id="@+id/back"
+            android:id="@+id/menu"
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/btn_back"
-            android:padding="11dp"
-            android:src="@drawable/ic_back"
-            android:visibility="invisible" />
+            android:contentDescription="@string/btn_menu"
+            android:padding="10dp"
+            android:src="@drawable/ic_menu" />
 
         <TextView
             android:id="@+id/title"
             style="@style/TopTitle"
-            android:text="@string/app_name" />
+            android:text="@string/app_name"
+            android:textColor="@color/text" />
 
         <View
-            android:layout_width="44dp"
-            android:layout_height="44dp" />
+            android:id="@+id/map_status_dot"
+            android:layout_width="12dp"
+            android:layout_height="12dp"
+            android:layout_marginEnd="14dp"
+            android:background="@drawable/bg_status_dot"
+            android:contentDescription="@null" />
     </LinearLayout>
 
-    <!-- Тонка лінія під панеллю: відділяє її від контенту без тіні -->
     <View
+        android:id="@+id/appbar_line"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_gravity="top"
         android:layout_marginTop="56dp"
-        android:background="@drawable/bg_appbar_line" />
+        android:background="@drawable/bg_appbar_line"
+        android:visibility="gone" />
 
-    <!-- Головний екран -->
+    <!-- ОНБОРДИНГ: показується лише поки немає групи -->
     <ScrollView
-        android:id="@+id/main_panel"
+        android:id="@+id/onboarding_panel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="64dp"
-        android:layout_marginTop="56dp"
-        android:clipToPadding="false"
-        android:fillViewport="true">
+        android:fillViewport="true"
+        android:visibility="gone">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="20dp">
 
-            <!-- Стан: найважливіше на екрані, тому банер над усіма -->
-            <LinearLayout
-                android:id="@+id/status_banner"
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_status_banner"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="16dp">
+                android:layout_marginTop="28dp"
+                android:text="@string/onboard_title"
+                android:textColor="@color/text"
+                android:textSize="26sp"
+                android:textStyle="bold" />
 
-                <View
-                    android:id="@+id/status_dot"
-                    android:layout_width="12dp"
-                    android:layout_height="12dp"
-                    android:layout_marginEnd="12dp"
-                    android:background="@drawable/bg_status_dot"
-                    android:contentDescription="@null" />
+            <TextView
+                style="@style/Hint"
+                android:layout_marginTop="8dp"
+                android:text="@string/onboard_subtitle" />
 
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:id="@+id/status"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/text"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/status_detail"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:textColor="@color/text_muted"
-                        android:textSize="13sp"
-                        android:visibility="gone" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <!-- 1. Хто я -->
             <LinearLayout
                 style="@style/Card"
-                android:layout_marginTop="14dp">
+                android:layout_marginTop="18dp">
 
                 <TextView
                     style="@style/CardTitle"
@@ -116,9 +109,7 @@
                     android:maxLength="24" />
             </LinearLayout>
 
-            <!-- 2. Група -->
             <LinearLayout
-                android:id="@+id/group_empty"
                 style="@style/Card"
                 android:layout_marginTop="14dp">
 
@@ -162,251 +153,267 @@
                     android:text="@string/btn_join_group" />
             </LinearLayout>
 
-            <!-- група вже є -->
-            <LinearLayout
-                android:id="@+id/group_ready"
-                style="@style/Card"
-                android:layout_marginTop="14dp"
-                android:visibility="gone">
-
-                <TextView
-                    style="@style/CardTitle"
-                    android:text="@string/label_group" />
-
-                <TextView
-                    android:id="@+id/code_value"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:background="@drawable/bg_code"
-                    android:padding="16dp"
-                    android:textColor="@color/brand"
-                    android:textSize="14sp"
-                    android:textIsSelectable="true" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:orientation="horizontal">
-
-                    <Button
-                        android:id="@+id/share"
-                        style="@style/Btn.Secondary"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="6dp"
-                        android:layout_weight="1"
-                        android:drawableStart="@drawable/ic_share"
-                        android:drawablePadding="6dp"
-                        android:text="@string/btn_share" />
-
-                    <Button
-                        android:id="@+id/copy"
-                        style="@style/Btn.Secondary"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="6dp"
-                        android:layout_marginStart="6dp"
-                        android:layout_weight="1"
-                        android:drawableStart="@drawable/ic_copy"
-                        android:drawablePadding="6dp"
-                        android:text="@string/btn_copy_link" />
-                </LinearLayout>
-
-                <Button
-                    android:id="@+id/map"
-                    style="@style/Btn.Secondary"
-                    android:layout_marginTop="6dp"
-                    android:text="@string/btn_map" />
-
-                <Button
-                    android:id="@+id/forget"
-                    style="@style/Btn.Danger"
-                    android:layout_marginTop="16dp"
-                    android:text="@string/btn_forget" />
-            </LinearLayout>
-
-            <!-- 3. Трекер -->
-            <LinearLayout
-                style="@style/Card"
-                android:layout_marginTop="14dp">
-
-                <TextView
-                    style="@style/CardTitle"
-                    android:text="@string/label_interval" />
-
-                <!-- Інтервал — чипами: видно всі варіанти й активний
-                     одночасно, на відміну від випадного дляга, який
-                     треба відкривати й закривати, щоб побачити значення. -->
-                <LinearLayout
-                    android:id="@+id/chips"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:orientation="horizontal" />
-
-                <TextView
-                    android:id="@+id/note_battery"
-                    style="@style/Hint"
-                    android:text="@string/note_battery" />
-
-                <Button
-                    android:id="@+id/toggle"
-                    style="@style/Btn"
-                    android:layout_marginTop="18dp"
-                    android:text="@string/btn_start" />
-            </LinearLayout>
-
-            <!-- 4. Діагностика: не окремою карткою, а рядком у налаштуваннях -->
-            <LinearLayout
-                style="@style/Card"
-                android:layout_marginTop="14dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        style="@style/Label"
-                        android:text="@string/label_diag" />
-
-                    <TextView
-                        style="@style/Hint"
-                        android:text="@string/hint_diag" />
-
-                    <TextView
-                        android:id="@+id/diag_state"
-                        style="@style/Hint"
-                        android:textColor="@color/warn"
-                        android:visibility="gone" />
-                </LinearLayout>
-
-                <CheckBox
-                    android:id="@+id/diag"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
-                    android:contentDescription="@string/label_diag"
-                    android:minWidth="48dp" />
-            </LinearLayout>
-
-            <!-- 5. Довідка -->
-            <LinearLayout
-                style="@style/Card"
-                android:layout_marginTop="14dp"
-                android:layout_marginBottom="8dp">
-
-                <TextView
-                    style="@style/CardTitle"
-                    android:text="@string/label_help" />
-
-                <TextView
-                    style="@style/Hint"
-                    android:text="@string/hint_help" />
-
-                <Button
-                    android:id="@+id/github"
-                    style="@style/Btn.Secondary"
-                    android:layout_marginTop="14dp"
-                    android:text="@string/btn_github" />
-            </LinearLayout>
+            <TextView
+                style="@style/Hint"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="8dp"
+                android:text="@string/onboard_autostart_hint" />
         </LinearLayout>
     </ScrollView>
 
-    <!-- Екран мапи -->
-    <LinearLayout
-        android:id="@+id/map_panel"
+    <!-- Затемнення: перехоплює тап, щоб закрити меню -->
+    <View
+        android:id="@+id/scrim"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="64dp"
-        android:layout_marginTop="56dp"
+        android:background="#99000000"
+        android:visibility="gone" />
+
+    <!-- ВИСУВНЕ МЕНЮ: усі налаштування тут -->
+    <LinearLayout
+        android:id="@+id/drawer"
+        android:layout_width="320dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="@drawable/bg_drawer"
+        android:elevation="16dp"
         android:orientation="vertical"
         android:visibility="gone">
 
-        <WebView
-            android:id="@+id/map_view"
+        <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:overScrollMode="never" />
-    </LinearLayout>
-
-    <!-- Нижнє меню -->
-    <LinearLayout
-        android:id="@+id/bottom_nav"
-        android:layout_width="match_parent"
-        android:layout_height="64dp"
-        android:layout_gravity="bottom"
-        android:background="@color/surface"
-        android:elevation="12dp"
-        android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp">
-
-        <LinearLayout
-            android:id="@+id/tab_group"
-            android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_marginEnd="6dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_tab"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingTop="6dp">
+            android:fillViewport="true">
 
-            <ImageView
-                android:id="@+id/tab_group_icon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_tab_group" />
-
-            <TextView
-                android:id="@+id/tab_group_text"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="@string/tab_group"
-                android:textColor="@color/text_muted"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+                android:orientation="vertical"
+                android:padding="16dp">
 
-        <LinearLayout
-            android:id="@+id/tab_map"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_marginStart="6dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_tab"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingTop="6dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-            <ImageView
-                android:id="@+id/tab_map_icon"
-                android:layout_width="22dp"
-                android:layout_height="22dp"
-                android:contentDescription="@null"
-                android:src="@drawable/ic_tab_map" />
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/menu_title"
+                        android:textColor="@color/text"
+                        android:textSize="22sp"
+                        android:textStyle="bold" />
 
-            <TextView
-                android:id="@+id/tab_map_text"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="@string/tab_map"
-                android:textColor="@color/text_muted"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
+                    <ImageButton
+                        android:id="@+id/drawer_close"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="?android:attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/btn_close"
+                        android:padding="10dp"
+                        android:src="@drawable/ic_close" />
+                </LinearLayout>
+
+                <!-- Стан трекера: найважливіше, тому найвище -->
+                <LinearLayout
+                    android:id="@+id/status_banner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:background="@drawable/bg_status_banner"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="16dp">
+
+                    <View
+                        android:id="@+id/status_dot"
+                        android:layout_width="12dp"
+                        android:layout_height="12dp"
+                        android:layout_marginEnd="12dp"
+                        android:background="@drawable/bg_status_dot"
+                        android:contentDescription="@null" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:id="@+id/status"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/text"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/status_detail"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:textColor="@color/text_muted"
+                            android:textSize="13sp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <!-- Ваше ім'я -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_marginTop="14dp">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:text="@string/label_name" />
+
+                    <EditText
+                        android:id="@+id/name_menu"
+                        style="@style/Field"
+                        android:hint="@string/hint_name"
+                        android:importantForAutofill="no"
+                        android:inputType="textPersonName|textCapWords"
+                        android:maxLength="24" />
+                </LinearLayout>
+
+                <!-- Група -->
+                <LinearLayout
+                    android:id="@+id/group_ready"
+                    style="@style/Card"
+                    android:layout_marginTop="14dp">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:text="@string/label_group" />
+
+                    <TextView
+                        android:id="@+id/code_value"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:background="@drawable/bg_code"
+                        android:padding="16dp"
+                        android:textColor="@color/brand"
+                        android:textSize="14sp"
+                        android:textIsSelectable="true" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/share"
+                            style="@style/Btn.Secondary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="6dp"
+                            android:layout_weight="1"
+                            android:drawableStart="@drawable/ic_share"
+                            android:drawablePadding="6dp"
+                            android:text="@string/btn_share" />
+
+                        <Button
+                            android:id="@+id/copy"
+                            style="@style/Btn.Secondary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:layout_weight="1"
+                            android:drawableStart="@drawable/ic_copy"
+                            android:drawablePadding="6dp"
+                            android:text="@string/btn_copy_link" />
+                    </LinearLayout>
+
+                    <Button
+                        android:id="@+id/forget"
+                        style="@style/Btn.Danger"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/btn_forget" />
+                </LinearLayout>
+
+                <!-- Як часто надсилати -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_marginTop="14dp">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:text="@string/label_interval" />
+
+                    <LinearLayout
+                        android:id="@+id/chips"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal" />
+
+                    <TextView
+                        style="@style/Hint"
+                        android:text="@string/note_battery" />
+                </LinearLayout>
+
+                <!-- Діагностика -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_marginTop="14dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/Label"
+                            android:text="@string/label_diag" />
+
+                        <TextView
+                            style="@style/Hint"
+                            android:text="@string/hint_diag" />
+
+                        <TextView
+                            android:id="@+id/diag_state"
+                            style="@style/Hint"
+                            android:textColor="@color/warn"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <CheckBox
+                        android:id="@+id/diag"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:contentDescription="@string/label_diag"
+                        android:minWidth="48dp" />
+                </LinearLayout>
+
+                <!-- Довідка -->
+                <LinearLayout
+                    style="@style/Card"
+                    android:layout_marginTop="14dp"
+                    android:layout_marginBottom="8dp">
+
+                    <TextView
+                        style="@style/CardTitle"
+                        android:text="@string/label_help" />
+
+                    <TextView
+                        style="@style/Hint"
+                        android:text="@string/hint_help" />
+
+                    <Button
+                        android:id="@+id/github"
+                        style="@style/Btn.Secondary"
+                        android:layout_marginTop="14dp"
+                        android:text="@string/btn_github" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
     </LinearLayout>
 </FrameLayout>

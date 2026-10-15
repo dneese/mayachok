@@ -27,6 +27,23 @@ const MAX_IMPLAUSIBLE_SPEED_MS = 1000;
 // з чужого телефону: навіть якщо про неї забудуть, вона не накопичиться.
 const DIAG_RETENTION_MS = 48 * 60 * 60 * 1000;
 
+// Слід за останню годину. Журнал точок ЖИВЕ ЛИШЕ ТУТ, тому що короткий:
+// просили показати, звідки людина прийшла за останню годину, а не архів
+// поїздок. Cron видаляє все старше за 65 хв (година + запас на cron-гілки),
+// тож таблиця завжди обмежена.
+//
+// Це свідоме розширення приватності порівняно з 1.7–1.14: раніше сервер
+// тримав рівно одну точку на людину. Тепер — годину руху. Обидві межі
+// (65 хв на сервері й добовий cron) саме тому й тримаються разом.
+const TRAIL_RETENTION_MS = 65 * 60 * 1000;
+// Скільки хвилин сліду віддавати на запит. Більше години не буває в базі,
+// тож 70 — це вже з запасом, а не реальний ліміт даних.
+const TRAIL_MAX_MINUTES = 70;
+const TRAIL_DEFAULT_MINUTES = 60;
+// Запобіжник від гігантської відповіді, якщо в групі раптом сотні людей
+// з інтервалом у секунди: 5000 точок ≈ 200 КБ JSON.
+const TRAIL_MAX_POINTS = 5000;
+
 // Алфавіт без i, l, o, u — щоб не плутати при диктуванні телефоном.
 // 12 символів × 5 біт = 60 біт: перебір неможливий, а набирається легко.
 const CODE_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
@@ -57,6 +74,10 @@ function normalizeCode(code) {
  * або вичерпав ліміт (тоді падають усі запити, включно з читанням), група
  * все одно показує останні відомі дані, а не порожню карту.
  */
+// Кеш слідів. Той самий сенс, що й у groupCache, але відповідь важча
+// (сотні точок), тож без кеша глядачі групи виїдали б ліміт читання D1
+// у рази швидше. Ключ — gid + uid + minutes.
+const trackCache = new Map();   // key -> { at, body }
 const groupCache = new Map();   // gid -> { at, body }
 // Аварійна копія відповіді — по gid, а не одна на всіх.
 // Раніше це був один lastGoodBody на інстанс, тож при падінні D1 група A
@@ -127,6 +148,22 @@ function cachePut(gid, body) {
     }
   }
   groupCache.set(gid, { at: Date.now(), body });
+}
+
+function trackGet(key) {
+  const hit = trackCache.get(key);
+  if (!hit) return null;
+  return Date.now() - hit.at < GROUP_CACHE_MS ? hit.body : null;
+}
+
+function trackPut(key, body) {
+  if (trackCache.size > 500) {
+    for (const [k, value] of trackCache) {
+      if (Date.now() - value.at > GROUP_CACHE_MS) trackCache.delete(k);
+      if (trackCache.size <= 400) break;
+    }
+  }
+  trackCache.set(key, { at: Date.now(), body });
 }
 
 function json(data, status = 200) {
@@ -336,34 +373,46 @@ async function handleIngest(request, db) {
   // Раніше тут було три походи: upsertUser, SELECT name, UPDATE coords.
   // Тепер все це — один UPSERT. Менше і записів, і прочитаних рядків, а
   // ліміт D1 (100k writes / 5M reads на добу) спільний на всі запити.
-  const res = await db
-    .prepare(
-      `INSERT INTO users (gid, uid, name, last_seen, created_at, lat, lon, acc, bat, point_ts)
-       VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9)
-       ON CONFLICT(gid, uid) DO UPDATE SET
-         last_seen  = ?4,
-         name       = COALESCE(?3, users.name),
-         lat        = ?5,
-         lon        = ?6,
-         acc        = ?7,
-         bat        = ?8,
-         point_ts   = ?9`,
-    )
-    .bind(
-      gid,
-      uid,
-      sanitizeName(params.get('name')) || null,
-      Date.now(),
-      Number(lat),
-      Number(lon),
-      acc,
-      bat,
-      ts,
-    )
-    .run();
+  const now = Date.now();
 
-  if (res.success) markWrite(uid);
-  meters.writes++;
+  // Два записи в одному batch: рядок учасника (остання точка) і рядок
+  // журналу (слід). Batch — одна поїздка до D1 замість двох, а ліміт
+  // запису спільний на всю систему.
+  //
+  // Журнал пишемо КОЖНУ прийняту точку, без жодних умов. Це принципово:
+  // саме логіка «а чи варто зберегти цю точку» у версіях до 1.12 мовчки
+  // зупинила надсилання в родині (Юля віддавала 8157 відкинутих фікс
+  // «точність гірша» — див. діагностику). Тут цієї логіки немає й не буде.
+  const batch = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO users (gid, uid, name, last_seen, created_at, lat, lon, acc, bat, point_ts)
+         VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(gid, uid) DO UPDATE SET
+           last_seen  = ?4,
+           name       = COALESCE(?3, users.name),
+           lat        = ?5,
+           lon        = ?6,
+           acc        = ?7,
+           bat        = ?8,
+           point_ts   = ?9`,
+      )
+      .bind(gid, uid, sanitizeName(params.get('name')) || null, now, Number(lat), Number(lon), acc, bat, ts),
+    db
+      .prepare(
+        `INSERT INTO points (gid, uid, ts, lat, lon, acc)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(gid, uid, ts) DO NOTHING`,
+      )
+      .bind(gid, uid, ts, Number(lat), Number(lon), acc),
+  ]);
+
+  const res = batch[0];
+  if (res && res.success) markWrite(uid);
+  // Кеш сліду навмисно НЕ чистимо: між точками минає інтервал (хвилини),
+  // а 5 секунд затримки на карті непомітні. Інакше кожен запис скидав би
+  // кеш у всіх глядачів і ми б самі собі виїдали ліміт читання D1.
+  meters.writes += 2;
   return json({ ok: true, uid, ts });
 }
 
@@ -415,6 +464,60 @@ async function handleGroup(db, gid) {
 }
 
 /**
+ * Слід за останню годину.
+ *
+ * Призначення рівно одне: показати на карті, звідки людина прийшла. Тому
+ * віддаємо точки з журналу `points`, який cron тримає не довшим за годину.
+ *
+ * Без `uid` (або з `uid=all`) повертаємо сліди всіх учасників групи:
+ * карта малює їх разом. З конкретним `uid` — лише його, напр. для
+ * підсвіченого сліду обраної людини.
+ */
+async function handleTrack(request, db) {
+  const params = await readParams(request);
+  const gid = await groupIdFor(params.get('code'));
+  if (!gid) return bad('invalid code');
+
+  const minutesRaw = Number(params.get('minutes'));
+  const minutes = Number.isFinite(minutesRaw)
+    ? Math.min(Math.max(Math.round(minutesRaw), 1), TRAIL_MAX_MINUTES)
+    : TRAIL_DEFAULT_MINUTES;
+  const since = Date.now() - minutes * 60 * 1000;
+
+  const uid = params.get('uid');
+  const single = uid && uid !== 'all';
+  const key = `${gid}:${single ? uid : 'all'}:${minutes}`;
+
+  const hit = trackGet(key);
+  if (hit) {
+    meters.cacheHits++;
+    return json(hit);
+  }
+
+  const sql =
+    'SELECT uid, ts, lat, lon, acc FROM points WHERE gid = ?1 AND ts >= ?2' +
+    (single ? ' AND uid = ?3' : '') +
+    ' ORDER BY ts ASC LIMIT ?' +
+    (single ? '4' : '3');
+  const stmt = db.prepare(sql);
+  const { results } = single
+    ? await stmt.bind(gid, since, uid, TRAIL_MAX_POINTS).all()
+    : await stmt.bind(gid, since, TRAIL_MAX_POINTS).all();
+
+  // Складаємо в об'єкт за uid: [[{ts,lat,lon,acc}], ...]. Мапа вже має
+  // список учасників з /api/group, тож цей об'єкт легко з ним зшити.
+  const tracks = {};
+  for (const row of results) {
+    if (!tracks[row.uid]) tracks[row.uid] = [];
+    tracks[row.uid].push({ ts: row.ts, lat: row.lat, lon: row.lon, acc: row.acc });
+  }
+
+  const body = { ok: true, now: Date.now(), minutes, tracks };
+  trackPut(key, body);
+  return json(body);
+}
+
+/**
  * Вихід із групи. Важливо, щоб це робило і сервер, а не лише телефон:
  * інакше людина «вийшла б» у себе на екрані, але її остання точка лишалася
  * б у базі й усі в групі бачили б, де вона була.
@@ -426,11 +529,21 @@ async function handleLeave(request, db) {
   const uid = params.get('uid');
   if (!uid) return bad('uid required');
 
-  const user = await db.prepare('DELETE FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid).run();
+  // Прибираємо і рядок учасника, і його слід. Без другого видалення
+  // людина зникла б із карти, але її рух за годину ще до 65 хв лежав би
+  // в базі — а це вже координати людини, яка вийшла.
+  const batch = await db.batch([
+    db.prepare('DELETE FROM users WHERE gid = ?1 AND uid = ?2').bind(gid, uid),
+    db.prepare('DELETE FROM points WHERE gid = ?1 AND uid = ?2').bind(gid, uid),
+  ]);
+  const user = batch[0];
 
   // Кеш скидаємо: людина вийшла — її не має бути на карті навіть на секунду.
   groupCache.delete(gid);
   lastGood.delete(gid);
+  for (const key of trackCache.keys()) {
+    if (key.startsWith(gid + ':')) trackCache.delete(key);
+  }
 
   return json({
     ok: true,
@@ -551,15 +664,20 @@ async function handleCleanup(db) {
   const diagCutoff = Date.now() - DIAG_RETENTION_MS;
   const usersCutoff = Date.now() - MEMBER_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const groupsCutoff = Date.now() - GROUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const trailCutoff = Date.now() - TRAIL_RETENTION_MS;
   const b = await db.prepare('DELETE FROM users WHERE last_seen < ?1').bind(usersCutoff).run();
   const c = await db.prepare('DELETE FROM groups WHERE created_at < ?1').bind(groupsCutoff).run();
   // Діагностика — тимчасова: два дні, і вона видаляється сама, навіть якщо
   // про неї забули. Тому вона й не більша за добу в масовому режимі.
   const e = await db.prepare('DELETE FROM diag WHERE ts < ?1').bind(diagCutoff).run();
+  // Слід тримаємо лише годину: саме ця межа робить журнал точок дешевим
+  // замість безмежного, яким він був до 1.7.
+  const t = await db.prepare('DELETE FROM points WHERE ts < ?1').bind(trailCutoff).run();
   return {
     deletedUsers: (b.meta && b.meta.changes) || 0,
     deletedGroups: (c.meta && c.meta.changes) || 0,
     deletedDiag: (e.meta && e.meta.changes) || 0,
+    deletedPoints: (t.meta && t.meta.changes) || 0,
   };
 }
 
@@ -631,6 +749,7 @@ export default {
           throw error;
         }
       }
+      if (path === '/api/track') return await handleTrack(request, db);
       if (path === '/api/rename') return await handleRename(request, db);
       if (path === '/api/leave') return await handleLeave(request, db);
       if (path === '/api/diag' && request.method === 'POST') return await handleDiagIngest(request, db);
@@ -649,6 +768,7 @@ export default {
             '/api/join',
             '/api/ingest',
             '/api/group',
+            '/api/track',
             '/api/rename',
             '/api/leave',
             '/api/diag',

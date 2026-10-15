@@ -13,6 +13,7 @@ let queries = 0;
 let failNext = 0;
 
 const diagRows = [];
+const points = [];
 
 const db = {
   batch(statements) {
@@ -33,6 +34,34 @@ const db = {
           });
           return { success: true, meta: { changes: 1 } };
         }
+        // Слід: журнал точок за останню годину. Пишеться в тому ж batch,
+        // що й рядок учасника.
+        if (/INSERT INTO points/.test(sql)) {
+          const dup = points.some(
+            (p) => p.gid === args[0] && p.uid === args[1] && p.ts === args[2],
+          );
+          if (!dup) {
+            points.push({
+              gid: args[0], uid: args[1], ts: args[2],
+              lat: args[3], lon: args[4], acc: args[5],
+            });
+          }
+          return { success: true, meta: { changes: dup ? 0 : 1 } };
+        }
+        if (/DELETE FROM points/.test(sql)) {
+          const before = points.length;
+          if (/uid = /.test(sql)) {
+            for (let i = points.length - 1; i >= 0; i--) {
+              if (points[i].gid === args[0] && points[i].uid === args[1]) points.splice(i, 1);
+            }
+          } else {
+            for (let i = points.length - 1; i >= 0; i--) {
+              if (points[i].ts < args[0]) points.splice(i, 1);
+            }
+          }
+          return { success: true, meta: { changes: before - points.length } };
+        }
+
         if (/DELETE FROM diag/.test(sql)) {
           const before = diagRows.length;
           for (let i = diagRows.length - 1; i >= 0; i--) {
@@ -101,6 +130,13 @@ const db = {
           rows = rows.slice(0, Number(limit) || rows.length);
           return { results: rows.map(({ session, ts, e, a, b, c, s }) => ({ session, ts, e, a, b, c, s })) };
         }
+        if (/FROM points/.test(sql)) {
+          let rows = points.filter((p) => p.gid === args[0] && p.ts >= args[1]);
+          if (/uid = /.test(sql)) rows = rows.filter((p) => p.uid === args[2]);
+          const limit = /uid = /.test(sql) ? args[3] : args[2];
+          rows = rows.sort((a, b) => a.ts - b.ts).slice(0, Number(limit) || rows.length);
+          return { results: rows.map(({ uid, ts, lat, lon, acc }) => ({ uid, ts, lat, lon, acc })) };
+        }
         if (/FROM users/.test(sql)) {
           return { results: users.filter((u) => u.gid === args[0]).map((u) => ({ ...u, ts: u.point_ts })) };
         }
@@ -123,6 +159,7 @@ const ingest = async (code, uid, lat, lon, t) =>
     `https://x/api/ingest?code=${code}&uid=${uid}&lat=${lat}&lon=${lon}&t=${t}`), env)).json();
 const group = async (code) =>
   (await worker.fetch(new Request(`https://x/api/group?code=${code}`), env)).json();
+const get = async (url) => (await worker.fetch(new Request(url), env)).json();
 
 console.log('запис позиції:');
 await ingest('code0001a', 'dev1', 49.84, 24.03, T);
@@ -130,23 +167,65 @@ check('точка прийнята', users.find((u) => u.uid === 'dev1').lat, 49
 check('час точки записано', users.find((u) => u.uid === 'dev1').point_ts, T);
 
 // Ліміт D1 спільний на всі запити, тож кожен прохід у базу — це гроші.
-// Було п'ять (upsert, SELECT last_seen, INSERT, SELECT name, UPDATE coords).
-// Стало чотири: три — запис точки й upsert учасника, четвертий — читання
-// попередньої точки для перевірки неможливого стрибка. Цей прохід важливіший
-// за інші три разом: без нього одна фікса з майбутнім часом заморозила
-// трекер на чужій точці на години (інцидент із Перу).
+// Стало п'ять: upsertUser (SELECT last_seen + INSERT), читання попередньої
+// точки для перевірки неможливого стрибка, і два записи одним batch —
+// рядок учасника + рядок сліду. Читання попередньої точки важливіше за
+// решту разом: без нього одна фікса з майбутнім часом заморозила трекер
+// на чужій точці на години (інцидент із Перу).
 // Рахуємо на першій точці нового uid: повторний ingest того ж uid
 // відсікає рейт-ліміт (8 секунд реального часу), тож лічильник був би 0.
 queries = 0;
 await ingest('code0001a', 'fresh1', 49.841, 24.031, T + 60_000);
-check('точка пишеться чотирьома проходами', queries, 4);
+check('точка пишеться пʼятьма проходами', queries, 5);
 check('координата записана', users.find((u) => u.uid === 'fresh1').lat, 49.841);
 
 // Друга людина: рейт-ліміт рахує реальний час, а тест усі запити робить
 // за мілісекунди. Тому перевіряємо перезапис на іншому uid.
 await ingest('code0001a', 'dev2', 49.85, 24.04, T + 60_000);
-check('наступна точка перезаписала попередню (журналу немає)', users.find((u) => u.uid === 'dev2').lat, 49.85);
+check('наступна точка перезаписала попередню (в users один рядок)', users.find((u) => u.uid === 'dev2').lat, 49.85);
 check('у базі один рядок на людину', users.filter((u) => u.uid === 'dev2').length, 1);
+
+console.log('слід за останню годину:');
+{
+  // Три точки в межах години (з паузами, щоб обійти рейт-ліміт 8 с) і одна
+  // поза годиною — вона не має потрапити у відповідь.
+  const t1 = Date.now() - 50 * 60 * 1000;
+  const t2 = Date.now() - 20 * 60 * 1000;
+  const t3 = Date.now();
+  const tOld = Date.now() - 90 * 60 * 1000;
+  await ingest('codesled1', 'sled1', 49.80, 24.00, t1);
+  await sleep(8200);
+  await ingest('codesled1', 'sled1', 49.81, 24.01, t2);
+  await sleep(8200);
+  await ingest('codesled1', 'sled1', 49.82, 24.02, t3);
+  await sleep(8200);
+  // Стара точка після нової: guard пропускає (швидкість у нормі), але в
+  // межах «остання година» її немає.
+  await ingest('codesled1', 'sled1', 49.70, 23.90, tOld);
+
+  const tr = await get('https://x/api/track?code=codesled1&uid=sled1&minutes=60');
+  check('слід повертає ok', tr.ok, true);
+  check('у сліді лише точки за годину', tr.tracks.sled1.length, 3);
+  check('точки впорядковані за часом', tr.tracks.sled1[0].ts < tr.tracks.sled1[1].ts, true);
+  check('остання точка — найновіша', tr.tracks.sled1[2].lat, 49.82);
+  check('стара точка за годину не потрапила', tr.tracks.sled1.some((p) => p.lat === 49.70), false);
+
+  // Слід усіх учасників групи одним запитом.
+  const all = await get('https://x/api/track?code=codesled1&minutes=60');
+  check('слід «усі» групує за uid', Array.isArray(all.tracks.sled1), true);
+
+  // Обрізання діапазону: понад 70 хв не приймаємо.
+  const big = await get('https://x/api/track?code=codesled1&uid=sled1&minutes=9999');
+  check('minutes обрізано до 70', big.minutes, 70);
+
+  // Чистка: старше за 65 хв зникає саме з журналу сліду.
+  const oldTs = Date.now() - 3 * 3600 * 1000;
+  points.push({ gid: 'codesled1', uid: 'sled1', ts: oldTs, lat: 1, lon: 1, acc: 1 });
+  const clean = await worker.scheduled({}, env);
+  const stillOld = points.filter((p) => p.gid === 'codesled1' && p.ts < Date.now() - 65 * 60 * 1000).length;
+  check('старий слід видалено cron', stillOld, 0);
+  check('cleanup повідомив про видалені точки', clean.deletedPoints > 0, true);
+}
 
 console.log('роль прибрана разом із чатом:');
 const joined = await (await worker.fetch(new Request(
@@ -214,6 +293,8 @@ const lv = await (await worker.fetch(new Request('https://x/api/leave?code=code0
 check('leave повертає ok', lv.ok, true);
 check('рядок учасника видалено', users.filter((u) => u.uid === 'lost1').length, 0);
 check('з мапи зник (кеш скинуто)', (await group('code0002b')).users.length, 0);
+// Людина вийшла — її рух за годину теж не має лишатися в базі.
+check('слід людини, що вийшла, теж видалено', points.filter((p) => p.uid === 'lost1').length, 0);
 
 console.log('стрибок на інший континент (знайдено в родині: Львів → Перу):');
 {

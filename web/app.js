@@ -17,10 +17,23 @@ const IDLE_POLL_MS = 60000;
 // сірів утричі раніше, ніж обіцяє сервер і README.
 const FRESH_MS = 30 * 60 * 1000;
 
+// Слід за останню годину — сервер тримає рівно стільки (див. /api/track).
+const TRAIL_MINUTES = 60;
+// Слід питаємо рідше за мапу: 15 секунд для лінії — зайве, а відповідь
+// важка (сотні точок). Хвилини досить, бо слід і так історичний.
+const TRAIL_POLL_MS = 60000;
+// Плавний рух маркера. Раніше точка «стрибала» на нове місце за один кадр —
+// око бачило телепорт, а не рух. Тепер маркер доїжджає за ~1.2 с.
+const MOVE_ANIM_MS = 1200;
+
 const state = {
   code: null,
   users: new Map(),
   markers: new Map(),
+  // uid -> L.polyline (слід за останню годину)
+  tracks: new Map(),
+  // остання відповідь /api/track, щоб перемалювати слід при виборі людини
+  trackData: {},
   selected: null,
   hours: 12,
   // серверний час, після якого маркер вважається сірим
@@ -30,6 +43,7 @@ const state = {
 let map = null;
 let started = false;
 let mapTimer = null;
+let lastTracksAt = 0;
 let editing = null; // uid, чию саме ім'я редагують
 
 const $ = (id) => document.getElementById(id);
@@ -96,6 +110,8 @@ function applyCode(code) {
   $('code-input').value = state.code;
   $('code-value').textContent = groupUrl();
   $('share-code').textContent = prettyCode(state.code);
+  const modalCode = $('share-code-modal');
+  if (modalCode) modalCode.textContent = prettyCode(state.code);
   $('share-link').textContent = groupUrl();
   start();
 }
@@ -193,6 +209,33 @@ function pinIcon(user, now) {
   });
 }
 
+/**
+ * Плавно пересуває маркер до нової точки.
+ *
+ * Навіщо: між опитуваннями минає 15 секунд, і маркер «стрибав» на нове місце
+ * одним кадром — виглядало як телепорт, а не як рух людини. Тепер доїжджає
+ * за ~1.2 с. Перша поява маркера — одразу на місці, без анімації.
+ */
+function moveMarker(marker, uid, target) {
+  const from = marker.getLatLng();
+  const dLat = target[0] - from.lat;
+  const dLon = target[1] - from.lng;
+  // Менше метра — не ворушимо: інакше маркер тремтів би на місці від шуму GPS.
+  if (Math.abs(dLat) < 1e-5 && Math.abs(dLon) < 1e-5) {
+    marker.setLatLng(target);
+    return;
+  }
+  if (marker._anim) cancelAnimationFrame(marker._anim);
+  const start = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - start) / MOVE_ANIM_MS);
+    const e = 1 - Math.pow(1 - k, 3); // easeOutCubic — м'яке гальмування
+    marker.setLatLng([from.lat + dLat * e, from.lng + dLon * e]);
+    marker._anim = k < 1 ? requestAnimationFrame(step) : null;
+  };
+  marker._anim = requestAnimationFrame(step);
+}
+
 function popupHtml(user, now) {
   const rows = [`<b>${escapeHtml(displayName(user))}</b>`, timeAgo(user.ts, now)];
   // Телефон у приміщенні не має GPS-сигналу й надсилає точку за мережею:
@@ -234,6 +277,8 @@ async function poll() {
     if (data.users.length === 0) setStatus('ok', 'у групі поки нікого немає');
     else if (data.stale) setStatus('err', 'сервер недоступний — показуємо останні дані');
     else setStatus('ok', `${data.users.length} у групі`);
+
+    fetchTracks(false);
   } catch {
     setStatus('err', 'немає зв’язку з сервером');
   }
@@ -260,7 +305,7 @@ function render() {
       m.addTo(map);
       state.markers.set(user.uid, m);
     } else {
-      marker.setLatLng([user.lat, user.lon]);
+      moveMarker(marker, user.uid, [user.lat, user.lon]);
       marker.setIcon(pinIcon(user, now));
       marker.setPopupContent(popupHtml(user, now));
     }
@@ -285,7 +330,7 @@ function renderPeople(now) {
     const empty = document.createElement('div');
     empty.className = 'people-empty';
     empty.textContent =
-      'Поки нікого не видно. Переконайтеся, що інші натиснули «Почати» і мають ту саму групу.';
+      'Поки нікого не видно. Переконайтеся, що інші встановили застосунок і мають ту саму групу.';
     list.appendChild(empty);
     return;
   }
@@ -348,11 +393,84 @@ function renderPeople(now) {
 // --- слід ---
 
 /**
- * Вибір людини. Класичного сліду більше немає — сервер тримає лише
- * останню відому точку, тому замість лінії показуємо час «був онлайн».
+ * Малює сліди за останню годину. Тло сіре (але кольорове за uid), обрана
+ * людина — товстіша й яскравіша. Маркери завжди поверх ліній, бо Leaflet
+ * малює вектори в overlayPane, а маркери — у markerPane над ним.
+ */
+function renderTracks() {
+  if (!map) return;
+  const seen = new Set();
+
+  for (const [uid, points] of Object.entries(state.trackData)) {
+    seen.add(uid);
+    const latlngs = (points || []).map((p) => [p.lat, p.lon]);
+    if (latlngs.length < 2) {
+      // Одна точка — це ще не рух; лінію не малюємо, маркер і так є.
+      const stale = state.tracks.get(uid);
+      if (stale) {
+        map.removeLayer(stale);
+        state.tracks.delete(uid);
+      }
+      continue;
+    }
+    const user = state.users.get(uid);
+    const color = user ? userColor(user) : '#64748b';
+    const selected = state.selected === uid;
+
+    let line = state.tracks.get(uid);
+    if (!line) {
+      line = L.polyline(latlngs, {});
+      line.addTo(map);
+      state.tracks.set(uid, line);
+    }
+    line.setLatLngs(latlngs);
+    line.setStyle({
+      color,
+      weight: selected ? 5 : 3,
+      opacity: selected ? 0.9 : 0.4,
+      lineJoin: 'round',
+      lineCap: 'round',
+    });
+  }
+
+  for (const [uid, line] of state.tracks) {
+    if (!seen.has(uid)) {
+      map.removeLayer(line);
+      state.tracks.delete(uid);
+    }
+  }
+  if (state.selected && state.tracks.has(state.selected)) {
+    state.tracks.get(state.selected).bringToFront();
+  }
+}
+
+/** Тягне слід із сервера, але не частіше за TRAIL_POLL_MS (окрім force). */
+async function fetchTracks(force) {
+  if (!state.code || !map) return;
+  const now = Date.now();
+  if (!force && now - lastTracksAt < TRAIL_POLL_MS) return;
+  lastTracksAt = now;
+  try {
+    const res = await fetch(
+      `${API}/api/track?code=${encodeURIComponent(state.code)}&minutes=${TRAIL_MINUTES}`,
+      { cache: 'no-store' },
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    state.trackData = data.tracks || {};
+    renderTracks();
+  } catch {
+    // Слід — допоміжна річ: не зміг завантажитись, карта й люди все одно є.
+  }
+}
+
+/**
+ * Вибір людини: показуємо час «був онлайн», підсвічуємо її слід і
+ * підтягуємо свіжий слід саме для неї.
  */
 function selectUser(uid) {
   state.selected = uid;
+  renderTracks();
   render();
 
   if (!uid) return;
@@ -491,6 +609,7 @@ function start() {
   $('gate').classList.add('hidden');
   document.body.classList.add('live');
   poll();
+  fetchTracks(true);
   armPolling();
 
   // Закрили вкладку або сховали її — зупиняємо таймер. Без цього вкладка
@@ -500,6 +619,7 @@ function start() {
       stopPolling();
     } else {
       poll();
+      fetchTracks(true);
       armPolling();
     }
   });

@@ -25,8 +25,25 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_gid ON users(gid);
 CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen);
 
--- Таблиця points більше не ведеться й прибрана міграцією 1.7:
--- телефон надсилає координату тільки коли зрушився, а сервер тримає лише останню.
+-- Слід за останню годину (версія 1.15).
+--
+-- У 1.7 цю таблицю прибрали, бо журнал pic точок ріс безмежно. Але без нього
+-- не видно, звідки людина прийшла, — а саме це й просили. Тому повертаємо
+-- журнал, але НЕ безмежний: код пише в нього кожну прийняту точку, а cron
+-- вичищає все старше за TRAIL_RETENTION_MS (65 хв). Тобто таблиця завжди
+-- тримає рівно останню годину, скільки б пристрій не працював.
+--
+-- Ключ (gid, uid, ts) заодно відкидає дублікати тієї самої мілісекунди.
+CREATE TABLE IF NOT EXISTS points (
+  gid  TEXT NOT NULL,
+  uid  TEXT NOT NULL,
+  ts   INTEGER NOT NULL,
+  lat  REAL NOT NULL,
+  lon  REAL NOT NULL,
+  acc  REAL,
+  PRIMARY KEY (gid, uid, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_points_uid ON points(gid, uid, ts);
 
 CREATE TABLE IF NOT EXISTS groups (
   gid        TEXT PRIMARY KEY,
