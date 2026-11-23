@@ -579,10 +579,11 @@ public final class MainActivity extends Activity {
       return;
     }
 
+    final String memberName = name;
     joinButton.setEnabled(false);
     api.join(
         code,
-        name,
+        memberName,
         new Api.JoinCallback() {
           @Override
           public void onResult(final String token, final String error) {
@@ -598,7 +599,7 @@ public final class MainActivity extends Activity {
                     }
                     prefs.setCode(code);
                     prefs.setMemberToken(token);
-                    prefs.setName(name);
+                    prefs.setName(memberName);
                     toast("Ви в групі");
                     render();
                     autoStart();
