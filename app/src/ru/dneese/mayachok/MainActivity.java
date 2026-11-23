@@ -178,7 +178,7 @@ public final class MainActivity extends Activity {
             public void onClick(View view) {
               prefs.setIntervalSeconds(INTERVALS[index]);
               if (TrackerService.running) {
-                Intent service = new Intent(this, TrackerService.class);
+                Intent service = new Intent(MainActivity.this, TrackerService.class);
                 service.setAction("interval");
                 startService(service);
               }
