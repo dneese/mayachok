@@ -26,6 +26,8 @@ const TRAIL_POLL_MS = 60000;
 // око бачило телепорт, а не рух. Тепер маркер доїжджає за ~1.2 с.
 const MOVE_ANIM_MS = 1200;
 
+const MayaCore = window.MayaCore;
+
 const state = {
   code: null,
   users: new Map(),
@@ -45,6 +47,7 @@ let started = false;
 let mapTimer = null;
 let lastTracksAt = 0;
 let editing = null; // uid, чию саме ім'я редагують
+let requestGeneration = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -52,7 +55,7 @@ const $ = (id) => document.getElementById(id);
 
 /** Чистить код: без дефісів, у нижньому регістрі — так сервер і приймає. */
 function cleanCode(raw) {
-  return String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  return MayaCore.cleanCode(raw);
 }
 
 /**
@@ -60,17 +63,7 @@ function cleanCode(raw) {
  * Так само, як Prefs.extractCode() у застосунку.
  */
 function codeFromInput(raw) {
-  let text = String(raw || '').trim();
-  if (!text) return null;
-  // mayachok://join/КОД — беремо останній сегмент шляху, щоб у код
-  // не просочилися слова «mayachok» та «join»
-  const slash = text.lastIndexOf('/');
-  if (slash >= 0 && slash < text.length - 1) text = text.slice(slash + 1);
-  // код живе у фрагменті після '#'
-  const hash = text.lastIndexOf('#');
-  if (hash >= 0 && hash < text.length - 1) text = text.slice(hash + 1);
-  const clean = cleanCode(text);
-  return clean.length >= 8 && clean.length <= 64 ? clean : null;
+  return MayaCore.codeFromInput(raw);
 }
 
 function codeFromHash() {
@@ -105,7 +98,23 @@ function inviteText() {
 
 // Зміна лише хеша не перезавантажує документ, тому start() треба
 // викликати вручну — інакше ворота лишаються на екрані.
+function resetGroupState() {
+  requestGeneration++;
+  state.users.clear();
+  state.trackData = {};
+  state.selected = null;
+  editing = null;
+  lastTracksAt = 0;
+  if (map) {
+    for (const marker of state.markers.values()) map.removeLayer(marker);
+    for (const line of state.tracks.values()) map.removeLayer(line);
+  }
+  state.markers.clear();
+  state.tracks.clear();
+}
+
 function applyCode(code) {
+  resetGroupState();
   state.code = cleanCode(code);
   $('code-input').value = state.code;
   $('code-value').textContent = groupUrl();
@@ -256,12 +265,15 @@ function popupHtml(user, now) {
 
 async function poll() {
   if (!state.code) return;
+  const generation = requestGeneration;
+  const code = state.code;
   try {
-    const res = await fetch(`${API}/api/group?code=${encodeURIComponent(state.code)}`, {
+    const res = await fetch(`${API}/api/group?code=${encodeURIComponent(code)}`, {
       cache: 'no-store',
     });
     if (!res.ok) throw new Error('http ' + res.status);
     const data = await res.json();
+    if (generation !== requestGeneration || code !== state.code) return;
 
     // Сервер сам каже, через скільки хвилин маркер стає сірим. Раніше мапа
     // мала власні 2 хвилини й сіріла втричі раніше за обіцянку.
@@ -280,7 +292,9 @@ async function poll() {
 
     fetchTracks(false);
   } catch {
-    setStatus('err', 'немає зв’язку з сервером');
+    if (generation === requestGeneration && code === state.code) {
+      setStatus('err', 'немає зв’язку з сервером');
+    }
   }
 }
 
@@ -375,9 +389,7 @@ function renderPeople(now) {
           <div class="person-name">${escapeHtml(displayName(user))}</div>
           <div class="person-sub${hasFix && !isFresh(user.ts, now) ? ' is-stale' : ''}">${sub}${user.bat != null && hasFix ? ' · ' + user.bat + '%' : ''}</div>
         </div>
-        <div class="person-actions">
-          <button class="edit" data-uid="${escapeHtml(user.uid)}" title="Перейменувати">✎</button>
-        </div>`;
+        <div class="person-actions"></div>`;
     }
 
     row.onclick = (event) => {
@@ -447,16 +459,19 @@ function renderTracks() {
 /** Тягне слід із сервера, але не частіше за TRAIL_POLL_MS (окрім force). */
 async function fetchTracks(force) {
   if (!state.code || !map) return;
+  const generation = requestGeneration;
+  const code = state.code;
   const now = Date.now();
   if (!force && now - lastTracksAt < TRAIL_POLL_MS) return;
   lastTracksAt = now;
   try {
     const res = await fetch(
-      `${API}/api/track?code=${encodeURIComponent(state.code)}&minutes=${TRAIL_MINUTES}`,
+      `${API}/api/track?code=${encodeURIComponent(code)}&minutes=${TRAIL_MINUTES}`,
       { cache: 'no-store' },
     );
     if (!res.ok) return;
     const data = await res.json();
+    if (generation !== requestGeneration || code !== state.code) return;
     state.trackData = data.tracks || {};
     renderTracks();
   } catch {
@@ -537,8 +552,7 @@ function cancelRename() {
 
 function fitAll() {
   if (!map) return;
-  const pts = [];
-  for (const u of state.users.values()) if (u.lat != null) pts.push([u.lat, u.lon]);
+  const pts = MayaCore.zoomPoints([...state.users.values()], state.trackData);
   if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.2));
   else map.setView([49.84, 24.03], 12);
 }
@@ -587,7 +601,12 @@ function closeModal(id) {
 }
 
 function start() {
-  if (started) return;
+  if (started) {
+    poll();
+    fetchTracks(true);
+    armPolling();
+    return;
+  }
 
   // Leaflet приходить з CDN. Якщо він не завантажився — L не існує, і
   // initMap() впав би з TypeError, залишивши сторінку з порожнім екраном.

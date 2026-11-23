@@ -21,9 +21,10 @@ APK ~70 КБ: жодних AndroidX, Google Play Services чи сторонні�
 
 ```sql
 users  (gid, uid)  -- складений ключ: один телефон може бути в кількох групах
-        name, last_seen, created_at, lat, lon, acc, bat, point_ts
-groups (gid, created_at)
+        token_hash, name, last_seen, created_at, lat, lon, acc, bat, point_ts
+groups (gid, created_at, last_activity)
 points (gid, uid, ts)  -- коротка історія для сліду: lat, lon, acc
+rate_limits (gid, uid, last_write)
 ```
 
 Таблиці `points`, `messages` і колонка `role` прибрані у версії 1.7 разом із
@@ -42,21 +43,28 @@ points (gid, uid, ts)  -- коротка історія для сліду: lat, 
 Усі учасники передають координати, тож окремого «режиму гостя» більше немає.
 Глядачі без застосунку просто дивляться мапу — вони нікуди не записуються.
 
+У версії 1.16 кожен учасник має окремий випадковий токен. У базі зберігається
+лише `SHA-256(token)`, а сам токен Android зберігає локально й передає в
+заголовку `x-member-token`. Токен потрібен для надсилення точки, перейменування
+та виходу. Старі учасники після міграції один раз приєднуються знову й отримують
+нові токені. Міграція — [`worker/migrate-security.sql`](worker/migrate-security.sql).
+
 ## API
 
 Усі запити вимагають `code`. `hours` обмежено 12.
 
 | Роут | Призначення |
 |---|---|
-| `POST /api/create` | створює групу, повертає код |
-| `POST /api/join` | `{code, uid, name}` — реєстрація в групі |
-| `GET /api/ingest?uid=&code=&lat=&lon=&t=&acc=&bat=&name=` | прийом точки; пише її в `users` і в `points` |
+| `POST /api/create` | створює групу, повертає код і токен учасника |
+| `POST /api/join` | `{code, uid, name}` — реєстрація; повертає токен учасника |
+| `POST /api/ingest` | `{code, uid, lat, lon, t, acc, bat, name}` + `x-member-token` |
 | `GET /api/track?code=&uid=&minutes=` | слід за останню годину (`minutes` 1…70, типово 60) |
 | `GET /api/group?code=` | учасники групи (включно з тими, хто ще без точки) |
-| `POST /api/rename` | `{code, uid, name}` — перейменування |
-| `POST /api/diag` | події діагностики (батч до 200) |
-| `GET /api/diag?code=&uid=&limit=` | читання діагностики, для розробника |
-| `GET /api/health` | стан |
+| `POST /api/rename` | `{code, uid, name}` + `x-member-token` — перейменування |
+| `POST /api/leave` | `{code, uid}` + `x-member-token` — видалення учасника і його сліду |
+| `POST /api/diag` | події діагностики (батч до 200) + `x-member-token` |
+| `GET /api/diag?code=&uid=&limit=` | читання діагностики лише з `x-admin-secret` |
+| `GET /api/health` | мінімальний стан `{ok: true}` |
 
 Сумісність: `?lat=&lon=&t=` без `/api/` теж приймається — старий скрипт
 `gps.php` працює як задумано.
@@ -126,7 +134,7 @@ points (gid, uid, ts)  -- коротка історія для сліду: lat, 
 ```bash
 source scripts/secrets.sh     # експортує CF_API_TOKEN і CF_ACCOUNT_ID
 
-bash scripts/setup-d1.sh      # створює D1, накатує schema.sql + migrate.sql
+bash scripts/setup-d1.sh      # створює D1, накатує schema.sql + міграції
 bash scripts/deploy-worker.sh # Worker через REST API
 ```
 
@@ -152,12 +160,9 @@ bash scripts/deploy-worker.sh # Worker через REST API
 | Адаптивний інтервал мапи | 15 с поки хтось рухається, 60 с коли всі точки застаріли |
 | Відмова при помилці + джиттер | Телефон не б'є в базу синхронно після мережевого збою |
 
-Перевірка: `node worker/position.test.mjs` — 57 тестів на мок-базі.
-
-**Про лічильники в `/api/health`:** вони живуть у пам'яті одного інстансу
-Worker, а запити розсипаються по різних, тому часто показують нуль. Це
-підказка, а не охорона. Про наближення до ліміту Cloudflare пише на пошту,
-а метрики — в D1 → Metrics → Row Metrics.
+Перевірка: `node worker/position.test.mjs` — інтеграційні тести Worker на
+справжньому SQLite з перевіркою токенів, лімітів, міграційних полів і
+відсутності витоку внутрішніх помилок.
 
 ## Надійність надсилання координат
 
@@ -275,6 +280,7 @@ gh secret set MAYACHOK_KS_PASS --body '…'
   У зворотному порядку стара закешована сторінка в браузері надішле
   `/api/join` із `role='chat'` на Worker, який уже не знає цієї колонки,
   і відповідь буде 500.
-- Усі ендпоїнти приймають код у запиті, тож він потрапляє в логи Worker.
-  У базі коду немає (лише `gid`), але код не варто вважати таємницею
-  проти вашого власного сервера.
+- Код групи передається Worker у запиті й може потрапити в логи Worker. У базі
+  коду немає (лише `gid`), але код не варто вважати таємницею проти вашого
+  власного сервера. В Android 1.16 координати й код передаються методом POST,
+  а зміна групи потребує окремого токена учасника.

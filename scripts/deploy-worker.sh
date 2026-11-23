@@ -60,6 +60,19 @@ if [ "$(echo "$response" | jq -r '.success // false')" != "true" ]; then
 fi
 echo "    завантажено"
 
+if [ -n "${MAYACHOK_ADMIN_SECRET:-}" ]; then
+  echo "==> оновлюю секрет адміністрування"
+  secret_response=$(curl -sS -X PUT "$API/workers/scripts/$WORKER_NAME/secrets" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data "$(jq -n --arg text "$MAYACHOK_ADMIN_SECRET" '{name:"ADMIN_SECRET",text:$text,type:"secret_text"}')")
+  if [ "$(echo "$secret_response" | jq -r '.success // false')" != "true" ]; then
+    echo "ПОМИЛКА оновлення секрета:" >&2
+    echo "$secret_response" | jq . >&2
+    exit 1
+  fi
+fi
+
 echo "==> вмикаю workers.dev"
 curl -sS -X POST "$API/workers/scripts/$WORKER_NAME/subdomain" \
   -H "Authorization: Bearer $CF_API_TOKEN" \

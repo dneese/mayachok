@@ -48,8 +48,15 @@ const EVENTS = {
 
 const fmtTime = (ts) => new Date(ts).toLocaleString('uk-UA', { hour12: false });
 
+const adminSecret = process.env.MAYACHOK_ADMIN_SECRET;
+if (!adminSecret) {
+  console.error('встанови MAYACHOK_ADMIN_SECRET перед запуском');
+  process.exit(1);
+}
+
 const res = await fetch(
   `https://mayachok.kikikiska.workers.dev/api/diag?code=${code}&uid=${uid}&limit=5000`,
+  { headers: { 'x-admin-secret': adminSecret } },
 );
 const data = await res.json();
 if (!data.ok) {

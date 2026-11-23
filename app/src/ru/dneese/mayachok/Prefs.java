@@ -41,6 +41,14 @@ public final class Prefs {
     sp.edit().putString("code", code == null ? "" : code.trim()).apply();
   }
 
+  public String memberToken() {
+    return sp.getString("member_token", "");
+  }
+
+  public void setMemberToken(String token) {
+    sp.edit().putString("member_token", token == null ? "" : token.trim()).apply();
+  }
+
   public String name() {
     return sp.getString("name", "");
   }
@@ -71,6 +79,34 @@ public final class Prefs {
 
   public void setTracking(boolean tracking) {
     sp.edit().putBoolean("tracking", tracking).apply();
+  }
+
+  public boolean serviceRunning() {
+    return sp.getBoolean("service_running", false);
+  }
+
+  public void setServiceRunning(boolean running) {
+    sp.edit().putBoolean("service_running", running).apply();
+  }
+
+  public boolean leavePending() {
+    return sp.getBoolean("leave_pending", false);
+  }
+
+  public String pendingLeaveCode() {
+    return sp.getString("pending_leave_code", "");
+  }
+
+  public String pendingLeaveToken() {
+    return sp.getString("pending_leave_token", "");
+  }
+
+  public void setLeavePending(boolean pending, String code, String token) {
+    sp.edit()
+        .putBoolean("leave_pending", pending)
+        .putString("pending_leave_code", code == null ? "" : code)
+        .putString("pending_leave_token", token == null ? "" : token)
+        .apply();
   }
 
   /**

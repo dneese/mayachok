@@ -14,6 +14,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TYPES = {
   '/index.html': 'text/html; charset=utf-8',
   '/app.js': 'application/javascript; charset=utf-8',
+  '/core.js': 'application/javascript; charset=utf-8',
   '/style.css': 'text/css; charset=utf-8',
 };
 

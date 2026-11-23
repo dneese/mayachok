@@ -8,8 +8,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT="build"
-VERSION_CODE=15
-VERSION_NAME="1.15"
+VERSION_CODE=16
+VERSION_NAME="1.16"
 # Стара назва, яку не змінюємо ніколи: на неї посилаються README, веб-сторінка
 # й розіслані в месенджерах посилання releases/latest/download/...
 # GitHub шукає asset з ТОЧНОЮ назвою, тож перейменування зламало б усі старі
@@ -139,6 +139,13 @@ with zipfile.ZipFile(apk) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED
     zout.write(dex, "classes.dex")
 shutil.move(tmp, apk)
 PY
+fi
+
+if [ "${MAYACHOK_SKIP_SIGN:-0}" = "1" ]; then
+  echo "==> 6/6 перевірка без підпису"
+  cp "$OUT/tmp/app-unsigned.apk" "$OUT/$APK_NAME"
+  echo "==> готово: $OUT/$APK_NAME"
+  exit 0
 fi
 
 echo "==> 6/6 підпис"

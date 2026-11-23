@@ -74,6 +74,8 @@ public final class Diag {
   private static String session = "";
   private static Context appContext;
   private static Prefs prefs;
+  private static boolean schedulerInstalled;
+  private static boolean uploading;
 
   private Diag() {}
 
@@ -83,27 +85,26 @@ public final class Diag {
   }
 
   public static synchronized void attach(Context context) {
-    if (appContext != null) return;
-    appContext = context.getApplicationContext();
-    prefs = new Prefs(appContext);
+    if (appContext == null) {
+      appContext = context.getApplicationContext();
+      prefs = new Prefs(appContext);
+      session = UUID.randomUUID().toString().substring(0, 8);
+    }
     if (!enabled()) return;
-
-    session = UUID.randomUUID().toString().substring(0, 8);
-    // Версія застосунку: без неї в журналі не видно, звідки прийшли дані, і
-    // доводиться гадати, чи телефон уже має той фікс, який ми додали.
+    if (!schedulerInstalled) {
+      schedulerInstalled = true;
+      io.scheduleWithFixedDelay(
+          new Runnable() {
+            @Override
+            public void run() {
+              flush();
+            }
+          },
+          FLUSH_MS, FLUSH_MS, TimeUnit.MILLISECONDS);
+    }
     event(ENV, Build.VERSION.SDK_INT, batteryPercent(),
         ignoresBatteryOptimizations() ? 1 : 0,
         Build.MANUFACTURER + " " + Build.MODEL + " / Маячок " + prefs.appVersion());
-    event(SERVICE_START, 0, 0, 0, session);
-
-    io.scheduleWithFixedDelay(
-        new Runnable() {
-          @Override
-          public void run() {
-            flush();
-          }
-        },
-        FLUSH_MS, FLUSH_MS, TimeUnit.MILLISECONDS);
   }
 
   /** Запис події. Дешево: якщо вимкнено — це один synchronized на порожньому буфері. */
@@ -133,22 +134,30 @@ public final class Diag {
   }
 
   public static synchronized void flush() {
-    if (!enabled() || buffer.isEmpty()) return;
+    if (!enabled() || buffer.isEmpty() || uploading) return;
     final List<String> batch = new ArrayList<String>(buffer);
-    buffer.clear();
     final int lost = dropped;
     dropped = 0;
+    uploading = true;
 
     io.execute(
         new Runnable() {
           @Override
           public void run() {
-            post(batch, lost);
+            boolean sent = post(batch, lost);
+            completeFlush(sent, batch.size());
           }
         });
   }
 
-  private static void post(List<String> batch, int lost) {
+  private static synchronized void completeFlush(boolean sent, int count) {
+    uploading = false;
+    if (sent) {
+      for (int i = 0; i < count && !buffer.isEmpty(); i++) buffer.remove(0);
+    }
+  }
+
+  private static boolean post(List<String> batch, int lost) {
     HttpURLConnection connection = null;
     try {
       StringBuilder body = new StringBuilder();
@@ -170,13 +179,16 @@ public final class Diag {
       connection.setConnectTimeout(5000);
       connection.setReadTimeout(5000);
       connection.setRequestProperty("Content-Type", "application/json");
+      connection.setRequestProperty("x-member-token", prefs.memberToken());
       OutputStream out = connection.getOutputStream();
       out.write(body.toString().getBytes("UTF-8"));
       out.close();
-      connection.getResponseCode();
+      int status = connection.getResponseCode();
+      return status >= 200 && status < 300;
     } catch (Exception error) {
       // Діагностика не має ламати трекінг: мовчки йдемо далі.
       android.util.Log.w(TAG, "не вдалося надіслати діагностику: " + error.getMessage());
+      return false;
     } finally {
       if (connection != null) connection.disconnect();
     }

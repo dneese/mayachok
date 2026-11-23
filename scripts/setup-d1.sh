@@ -69,6 +69,19 @@ if [ -f worker/migrate.sql ]; then
   echo "==> застосовую міграції"
   run_sql "міграція" worker/migrate.sql
 fi
+if [ -f worker/migrate-security.sql ]; then
+  columns=$(curl -sS -X POST "$API/d1/database/$DB_ID/query" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data "$(jq -n '{sql:"SELECT name FROM pragma_table_info(\u0027users\u0027) UNION ALL SELECT name FROM pragma_table_info(\u0027groups\u0027)"}')" |
+    jq -r '.result[0].results[]?.name')
+  if printf '%s\n' "$columns" | grep -qx 'token_hash' && printf '%s\n' "$columns" | grep -qx 'last_activity'; then
+    echo "==> міграція безпеки вже застосована"
+  else
+    echo "==> застосовую міграцію безпеки"
+    run_sql "міграція безпеки" worker/migrate-security.sql
+  fi
+fi
 
 echo "==> підставляю database_id у wrangler.toml"
 sed -i.bak "s|^database_id = .*|database_id = \"$DB_ID\"|" worker/wrangler.toml && rm -f worker/wrangler.toml.bak

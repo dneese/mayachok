@@ -44,9 +44,9 @@ public final class Api {
     void onResult(String error);
   }
 
-  /** Реєстрація в групі: повертає null при успіху або текст помилки. */
+  /** Реєстрація в групі: повертає токен учасника або текст помилки. */
   public interface JoinCallback {
-    void onResult(String error);
+    void onResult(String token, String error);
   }
 
   /**
@@ -73,7 +73,7 @@ public final class Api {
    * екрані, а її остання точка лишалася б у базі — усі в групі бачили б,
    * де вона була.
    */
-  public void leave(final String code, final Callback callback) {
+  public void leave(final String code, final String token, final Callback callback) {
     pool.execute(
         new Runnable() {
           @Override
@@ -87,6 +87,9 @@ public final class Api {
                       + "&uid="
                       + URLEncoder.encode(new Prefs(context).uid(), "UTF-8");
               connection = open(url);
+              if (token != null && !token.isEmpty()) {
+                connection.setRequestProperty("x-member-token", token);
+              }
               callback.onResult(connection.getResponseCode() == 200 ? null : "не вийшло");
             } catch (Exception error) {
               callback.onResult("немає зв'язку");
@@ -102,12 +105,23 @@ public final class Api {
         new Runnable() {
           @Override
           public void run() {
-            callback.onResult(doJoin(code, name));
+            JoinResult result = doJoin(code, name);
+            callback.onResult(result.token, result.error);
           }
         });
   }
 
-  private String doJoin(String code, String name) {
+  private static final class JoinResult {
+    final String token;
+    final String error;
+
+    JoinResult(String token, String error) {
+      this.token = token;
+      this.error = error;
+    }
+  }
+
+  private JoinResult doJoin(String code, String name) {
     HttpURLConnection connection = null;
     try {
       Prefs prefs = new Prefs(context);
@@ -128,15 +142,25 @@ public final class Api {
       connection.setReadTimeout(READ_TIMEOUT_MS);
       connection.setRequestProperty("Content-Type", "application/json");
       connection.setRequestProperty("Accept", "application/json");
+      if (!prefs.memberToken().isEmpty()) {
+        connection.setRequestProperty("x-member-token", prefs.memberToken());
+      }
       connection.getOutputStream().write(body.getBytes("UTF-8"));
       connection.getOutputStream().close();
 
       int status = connection.getResponseCode();
-      if (status < 200 || status >= 300) return "Сервер відповів помилкою (" + status + ")";
-      connection.getInputStream().close();
-      return null;
+      if (status < 200 || status >= 300) {
+        return new JoinResult(null, "Сервер відповів помилкою (" + status + ")");
+      }
+      String response = read(connection.getInputStream());
+      String token = extractJsonString(response, "token");
+      if (token == null && !prefs.memberToken().isEmpty()) token = prefs.memberToken();
+      if (token == null || token.isEmpty()) {
+        return new JoinResult(null, "Сервер не повернув токен учасника");
+      }
+      return new JoinResult(token, null);
     } catch (Exception error) {
-      return "Немає зв’язку з сервером";
+      return new JoinResult(null, "Немає зв’язку з сервером");
     } finally {
       if (connection != null) connection.disconnect();
     }
@@ -164,17 +188,19 @@ public final class Api {
     return out.append('"').toString();
   }
 
-  /** Повертає код групи або null з описом помилки. */
+  /** Повертає код групи, токен учасника або null з описом помилки. */
   public interface GroupCallback {
-    void onResult(String code, String error);
+    void onResult(String code, String token, String error);
   }
 
   private static final class GroupResult {
     final String code;
+    final String token;
     final String error;
 
-    GroupResult(String code, String error) {
+    GroupResult(String code, String token, String error) {
       this.code = code;
+      this.token = token;
       this.error = error;
     }
   }
@@ -219,7 +245,7 @@ public final class Api {
           @Override
           public void run() {
             GroupResult result = doCreateGroup();
-            callback.onResult(result.code, result.error);
+            callback.onResult(result.code, result.token, result.error);
           }
         });
   }
@@ -235,23 +261,29 @@ public final class Api {
       connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
       connection.setReadTimeout(READ_TIMEOUT_MS);
       connection.setRequestProperty("Accept", "application/json");
-      connection.setRequestProperty("Content-Length", "0");
+      connection.setRequestProperty("Content-Type", "application/json");
+      String requestBody = "{\"uid\":" + jsonString(prefs.uid()) + ",\"name\":" + jsonString(prefs.name()) + "}";
+      connection.getOutputStream().write(requestBody.getBytes("UTF-8"));
       connection.getOutputStream().close();
 
       int status = connection.getResponseCode();
       if (status < 200 || status >= 300) {
-        return new GroupResult(null, "Сервер відповів помилкою (" + status + ")");
+        return new GroupResult(null, null, "Сервер відповів помилкою (" + status + ")");
       }
 
-      String body = read(connection.getInputStream());
-      String code = extractJsonString(body, "code");
+      String response = read(connection.getInputStream());
+      String code = extractJsonString(response, "code");
+      String token = extractJsonString(response, "token");
       if (code == null || code.isEmpty()) {
-        return new GroupResult(null, "Сервер не повернув код");
+        return new GroupResult(null, null, "Сервер не повернув код");
       }
-      return new GroupResult(code, null);
+      if (token == null || token.isEmpty()) {
+        return new GroupResult(null, null, "Сервер не повернув токен учасника");
+      }
+      return new GroupResult(code, token, null);
 
     } catch (Exception error) {
-      return new GroupResult(null, "Немає зв’язку з сервером");
+      return new GroupResult(null, null, "Немає зв’язку з сервером");
     } finally {
       if (connection != null) connection.disconnect();
     }
@@ -322,24 +354,36 @@ public final class Api {
   private SendOutcome trySend(Prefs prefs, double lat, double lon, float acc, long fixAt) {
     HttpURLConnection connection = null;
     try {
-      StringBuilder query = new StringBuilder();
-      query.append("uid=").append(enc(prefs.uid()));
-      query.append("&code=").append(enc(prefs.code()));
-      query.append("&lat=").append(String.format(java.util.Locale.US, "%.6f", lat));
-      query.append("&lon=").append(String.format(java.util.Locale.US, "%.6f", lon));
-      // Час вимірювання точки, а не час відправки.
-      query.append("&t=").append(fixAt > 0 ? fixAt : System.currentTimeMillis());
-      if (acc > 0 && acc < 9999f) query.append("&acc=").append(Math.round(acc));
-      if (!prefs.name().isEmpty()) query.append("&name=").append(enc(prefs.name()));
-      Integer battery = batteryPercent();
-      if (battery != null) query.append("&bat=").append(battery);
+      String body =
+          "{\"uid\":"
+              + jsonString(prefs.uid())
+              + ",\"code\":"
+              + jsonString(prefs.code())
+              + ",\"lat\":"
+              + String.format(java.util.Locale.US, "%.6f", lat)
+              + ",\"lon\":"
+              + String.format(java.util.Locale.US, "%.6f", lon)
+              + ",\"t\":"
+              + (fixAt > 0 ? fixAt : System.currentTimeMillis())
+              + ",\"acc\":"
+              + (acc > 0 && acc < 9999f ? Math.round(acc) : 0)
+              + ",\"name\":"
+              + jsonString(prefs.name())
+              + ",\"bat\":"
+              + (batteryPercent() == null ? 0 : batteryPercent())
+              + "}";
 
-      URL url = new URL(prefs.api() + "/api/ingest?" + query);
+      URL url = new URL(prefs.api() + "/api/ingest");
       connection = (HttpURLConnection) url.openConnection();
-      connection.setRequestMethod("GET");
+      connection.setRequestMethod("POST");
+      connection.setDoOutput(true);
       connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
       connection.setReadTimeout(READ_TIMEOUT_MS);
+      connection.setRequestProperty("Content-Type", "application/json");
       connection.setRequestProperty("Accept", "application/json");
+      connection.setRequestProperty("x-member-token", prefs.memberToken());
+      connection.getOutputStream().write(body.getBytes("UTF-8"));
+      connection.getOutputStream().close();
 
       int status = connection.getResponseCode();
       if (status < 200 || status >= 300) {
@@ -349,7 +393,6 @@ public final class Api {
       InputStream stream = connection.getInputStream();
       BufferedReader reader = new BufferedReader(new InputStreamReader(stream));
       while (reader.readLine() != null) {
-        // читаємо відповідь, щоб зʼєднання закрилося коректно
       }
       reader.close();
       return new SendOutcome(true, false, null);

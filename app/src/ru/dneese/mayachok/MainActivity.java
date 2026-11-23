@@ -146,6 +146,10 @@ public final class MainActivity extends Activity {
     setUpActions();
     setUpMap();
 
+    if (prefs.configured() && prefs.memberToken().isEmpty()) {
+      prefs.setCode("");
+      toast("Приєднайтеся до групи ще раз");
+    }
     handleDeepLink(getIntent());
     render();
   }
@@ -173,6 +177,11 @@ public final class MainActivity extends Activity {
             @Override
             public void onClick(View view) {
               prefs.setIntervalSeconds(INTERVALS[index]);
+              if (TrackerService.running) {
+                Intent service = new Intent(this, TrackerService.class);
+                service.setAction("interval");
+                startService(service);
+              }
               render();
             }
           });
@@ -344,6 +353,8 @@ public final class MainActivity extends Activity {
     WebSettings settings = mapView.getSettings();
     settings.setJavaScriptEnabled(true);
     settings.setDomStorageEnabled(true);
+    settings.setAllowFileAccess(false);
+    settings.setAllowContentAccess(false);
     settings.setSupportMultipleWindows(false);
     settings.setMediaPlaybackRequiresUserGesture(true);
 
@@ -351,14 +362,13 @@ public final class MainActivity extends Activity {
         new WebViewClient() {
           @Override
           public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-            Uri uri = request.getUrl();
-            // Мапа живе на нашому ж Worker, тож визначаємо свій хост із mapUrl(),
-            // а не хардкодимо: інакше при зміні адреси посилання в карті
-            // почали б відкриватись у браузері замість убудованої мапи.
-            String host = uri == null ? null : uri.getHost();
-            if (host != null && host.equals(Uri.parse(prefs.mapUrl()).getHost())) return false;
-            openUrl(uri == null ? "" : uri.toString());
-            return true;
+            return handleUrl(request == null ? null : request.getUrl());
+          }
+
+          @Override
+          @SuppressWarnings("deprecation")
+          public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            return handleUrl(url == null ? null : Uri.parse(url));
           }
 
           @Override
@@ -422,6 +432,18 @@ public final class MainActivity extends Activity {
     mapError = errorBox;
   }
 
+  private boolean handleUrl(Uri uri) {
+    if (uri == null) return false;
+    String scheme = uri.getScheme();
+    String host = uri.getHost();
+    String mapHost = Uri.parse(prefs.mapUrl()).getHost();
+    if ("https".equalsIgnoreCase(scheme) && host != null && host.equals(mapHost)) {
+      return false;
+    }
+    openUrl(uri.toString());
+    return true;
+  }
+
   private int dp(int value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
   }
@@ -451,6 +473,7 @@ public final class MainActivity extends Activity {
       mapView.resumeTimers();
       mapView.onResume();
     }
+    retryPendingLeave();
     // Автозапуск: щойно є група й дозвіл — трекер піднімається сам.
     autoStart();
     // Стан показує «остання точка: N хв тому», тож перечитуємо його
@@ -514,7 +537,7 @@ public final class MainActivity extends Activity {
     api.createGroup(
         new Api.GroupCallback() {
           @Override
-          public void onResult(final String code, final String error) {
+          public void onResult(final String code, final String token, final String error) {
             runOnUiThread(
                 new Runnable() {
                   @Override
@@ -523,6 +546,7 @@ public final class MainActivity extends Activity {
                     createButton.setText(R.string.btn_create_group);
                     if (code != null) {
                       prefs.setCode(code);
+                      prefs.setMemberToken(token);
                       toast("Групу створено");
                       render();
                       autoStart();
@@ -555,17 +579,13 @@ public final class MainActivity extends Activity {
       return;
     }
 
-    prefs.setCode(code);
-    prefs.setName(name);
-    render();
-
     joinButton.setEnabled(false);
     api.join(
         code,
         name,
         new Api.JoinCallback() {
           @Override
-          public void onResult(final String error) {
+          public void onResult(final String token, final String error) {
             runOnUiThread(
                 new Runnable() {
                   @Override
@@ -573,13 +593,36 @@ public final class MainActivity extends Activity {
                     joinButton.setEnabled(true);
                     if (error != null) {
                       toast(error);
+                      render();
                       return;
                     }
+                    prefs.setCode(code);
+                    prefs.setMemberToken(token);
+                    prefs.setName(name);
                     toast("Ви в групі");
                     render();
                     autoStart();
                   }
                 });
+          }
+        });
+  }
+
+  private void retryPendingLeave() {
+    if (!prefs.leavePending()) return;
+    final String code = prefs.pendingLeaveCode();
+    final String token = prefs.pendingLeaveToken();
+    if (!isCode(code)) {
+      prefs.setLeavePending(false, "", "");
+      return;
+    }
+    api.leave(
+        code,
+        token,
+        new Api.Callback() {
+          @Override
+          public void onResult(String error) {
+            if (error == null) prefs.setLeavePending(false, "", "");
           }
         });
   }
@@ -596,13 +639,19 @@ public final class MainActivity extends Activity {
               public void onClick(android.content.DialogInterface dialog, int which) {
                 stopTracking();
                 final String leavingCode = prefs.code();
+                final String leavingToken = prefs.memberToken();
                 if (isCode(leavingCode)) {
+                  prefs.setLeavePending(true, leavingCode, leavingToken);
                   api.leave(
                       leavingCode,
+                      leavingToken,
                       new Api.Callback() {
                         @Override
                         public void onResult(String error) {
-                          if (error == null) return;
+                          if (error == null) {
+                            prefs.setLeavePending(false, "", "");
+                            return;
+                          }
                           // Обов'язково через runOnUiThread: callback приходить
                           // з фонового потоку, а Toast з нього — це падіння.
                           runOnUiThread(
@@ -738,6 +787,11 @@ public final class MainActivity extends Activity {
     return prefs.isTracking();
   }
 
+  private boolean hasLocationPermission() {
+    return hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+        || hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION);
+  }
+
   private boolean hasPermission(String permission) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
     return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
@@ -755,17 +809,27 @@ public final class MainActivity extends Activity {
     if (!prefs.configured()) return;
     if (prefs.isTracking() && TrackerService.running) return;
 
-    if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+    if (!hasLocationPermission()) {
       if (!autoStartPrompted) {
         autoStartPrompted = true;
-        requestPermissions(new String[] {Manifest.permission.ACCESS_FINE_LOCATION}, REQ_LOCATION);
+        requestPermissions(
+            new String[] {
+              Manifest.permission.ACCESS_FINE_LOCATION,
+              Manifest.permission.ACCESS_COARSE_LOCATION
+            },
+            REQ_LOCATION);
       }
+      return;
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        && !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+      requestNotifications();
       return;
     }
 
     startServiceIntent();
     ensureBackgroundLocation();
-    requestNotifications();
   }
 
   private void startServiceIntent() {
@@ -818,6 +882,7 @@ public final class MainActivity extends Activity {
     stopService(service);
 
     prefs.setTracking(false);
+    prefs.setServiceRunning(false);
     render();
   }
 
@@ -830,11 +895,17 @@ public final class MainActivity extends Activity {
   public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
     super.onRequestPermissionsResult(code, permissions, results);
     if (code == REQ_LOCATION) {
-      if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+      boolean granted = false;
+      for (int result : results) {
+        if (result == PackageManager.PERMISSION_GRANTED) granted = true;
+      }
+      if (granted) {
         autoStart();
       } else {
         toast("Без геолокації трекер не працює");
       }
+    } else if (code == REQ_NOTIFY) {
+      autoStart();
     }
   }
 }

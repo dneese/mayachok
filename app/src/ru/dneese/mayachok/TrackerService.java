@@ -74,7 +74,7 @@ public final class TrackerService extends Service implements LocationListener {
   private float lastAcc;
   private long lastFixAt;
   private boolean haveFix;
-  private boolean inFlight;
+  private volatile boolean inFlight;
 
   private String lastNotificationText = "";
   private long lastNotificationAt;
@@ -103,6 +103,7 @@ public final class TrackerService extends Service implements LocationListener {
       return;
     }
     running = true;
+    prefs.setServiceRunning(true);
     cancelBootFailedNotification();
   }
 
@@ -117,8 +118,14 @@ public final class TrackerService extends Service implements LocationListener {
     }
     if ("stop".equals(action)) {
       prefs.setTracking(false);
+      prefs.setServiceRunning(false);
       stopSelf();
       return START_NOT_STICKY;
+    }
+
+    if ("interval".equals(action)) {
+      applyInterval();
+      return START_STICKY;
     }
 
     if (!prefs.configured()) {
@@ -134,8 +141,9 @@ public final class TrackerService extends Service implements LocationListener {
     // після смерті процесу сервіс відновлювався, але наступний змах або
     // перезавантаження вже не піднімали його — трекер мовчав назавжди.
     prefs.setTracking(true);
+    prefs.setServiceRunning(true);
 
-    maxFixAgeMs = Math.max(MIN_FIX_AGE_MS, 2L * prefs.intervalSeconds() * 1000L);
+    applyInterval();
 
     // Потоки створюємо один раз: повторний старт не повинен лишати старий
     // HandlerThread живим назавжди.
@@ -148,6 +156,17 @@ public final class TrackerService extends Service implements LocationListener {
       sendNow();
     }
     return START_STICKY;
+  }
+
+  private void applyInterval() {
+    maxFixAgeMs = Math.max(MIN_FIX_AGE_MS, 2L * prefs.intervalSeconds() * 1000L);
+    if (handler == null) return;
+    try {
+      if (locationManager != null) locationManager.removeUpdates(this);
+    } catch (Exception ignored) {
+    }
+    subscribe();
+    scheduleNext();
   }
 
   /**
@@ -167,12 +186,20 @@ public final class TrackerService extends Service implements LocationListener {
 
   private void requestUpdates(String provider, long minTime) {
     try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-          && checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
-              != PackageManager.PERMISSION_GRANTED) {
-        Log.w(TAG, "немає дозволу на геолокацію");
-        stopSelf();
-        return;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        boolean fine =
+            checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean coarse =
+            checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        if (!fine && !coarse) {
+          Log.w(TAG, "немає дозволу на геолокацію");
+          prefs.setLastSendError("Немає дозволу на геолокацію");
+          prefs.setServiceRunning(false);
+          stopSelf();
+          return;
+        }
       }
       // minDistance = 0: система віддає фікса кожні minTime, як ми й просили.
       locationManager.requestLocationUpdates(provider, minTime, 0f, this, handler.getLooper());
@@ -375,11 +402,24 @@ public final class TrackerService extends Service implements LocationListener {
     }
     PendingIntent pending = PendingIntent.getActivity(this, 0, open, flags);
 
-    return new Notification.Builder(this, CHANNEL_ID)
+    Intent stop = new Intent(this, TrackerService.class);
+    stop.setAction("stop");
+    PendingIntent stopPending =
+        PendingIntent.getService(this, 1, stop, flags);
+
+    Notification.Builder builder =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            ? new Notification.Builder(this, CHANNEL_ID)
+            : new Notification.Builder(this);
+    return builder
         .setContentTitle("Трекер активний")
         .setContentText(text)
         .setSmallIcon(android.R.drawable.ic_menu_mylocation)
         .setContentIntent(pending)
+        .addAction(
+            android.R.drawable.ic_media_pause,
+            "Пауза",
+            stopPending)
         .setOngoing(true)
         .build();
   }
@@ -421,6 +461,7 @@ public final class TrackerService extends Service implements LocationListener {
   @Override
   public void onDestroy() {
     running = false;
+    prefs.setServiceRunning(false);
     if (handler != null) handler.removeCallbacksAndMessages(null);
     if (workerThread != null) workerThread.quitSafely();
     try {
